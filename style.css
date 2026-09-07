@@ -1,0 +1,12 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #05050a;
+  height: 100%;
+}
+
+canvas {
+  display: block;
+  cursor: crosshair;
+}
