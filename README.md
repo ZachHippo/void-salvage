@@ -1,7 +1,8 @@
 # Void Salvage
 
-A canvas twin-stick survival shooter. No build step, no libraries, no network
-calls -- three files and a browser.
+A bullet-hell boss rush on a canvas. One ship against bosses built from blocks:
+shred the armour, expose the core, blow it, then spend the salvage in the hangar
+before the next fight. No build step, no libraries, no network calls.
 
 **Play it:** https://zachhippo.github.io/void-salvage/
 
@@ -12,27 +13,48 @@ calls -- three files and a browser.
 | Move | `W` `A` `S` `D` or arrow keys |
 | Aim | mouse |
 | Fire | click, or hold to keep firing |
-| Gravity pulse | `E`, once the pulse bar is full |
+| Pulse | `E`, once the pulse bar is full |
 | Pause | `P` or `Esc` |
-| Restart | `R` or click, after you die |
+| Launch (hangar) | `Enter`, or click LAUNCH |
+| Reset save (hangar) | `R` |
 
-## How it plays
+## The loop
 
-Survive. Enemies stream in from the edges of the screen and get faster, tougher
-and more varied the longer you last. Every kill drops salvage orbs -- collect
-them to charge the gravity pulse, which clears out everything around you.
+Each level builds a boss out of blocks on a rotating grid. Three kinds:
 
-## The enemies
+- **Armour** (purple) -- bulk. It is what seals the core.
+- **Guns** (orange) -- each one runs a fire pattern. Destroy it and that pattern
+  stops for good, so what you shoot first shapes the whole fight.
+- **Core** (cyan) -- sealed and immune until the armour is 80% gone. Blow it to
+  clear the level.
 
-| Enemy | Behaviour |
-| --- | --- |
-| **Drifter** | Pink shard. Straight-line chase. The baseline threat, present from the start. |
-| **Darter** | Green dart. Fast and fragile, weaves as it closes, so it is hard to lead. Appears from 15s. |
-| **Spitter** | Orange ring. Keeps its distance and shoots at you instead of ramming. Appears from 35s. |
-| **Brute** | Purple hex. Slow and heavy: it survives a ram and shoves you clear, survives the gravity pulse, and splits into two Drifters when it finally goes down. Appears from 55s. |
+Every block you break pays out salvage. Orbs magnet toward you; collect them to
+charge the pulse and bank currency. Clearing a level auto-salvages the wreck, so
+the core's payout is never stranded -- but **dying only banks what you actually
+picked up**, which is the whole risk.
 
-Threat level ticks up every 20 seconds. Spawn rate and enemy stats ramp over the
-first 60-90 seconds, so early runs are quiet and late ones are not.
+## Gun patterns
+
+They unlock as the levels climb, so early bosses are readable and late ones are not.
+
+| Pattern | From | Behaviour |
+| --- | --- | --- |
+| Aimed | 1 | single shot straight at you |
+| Spread | 3 | eight-way radial burst |
+| Spiral | 5 | continuous rotating stream |
+| Seeker | 7 | slow homing missile |
+| Laser | 9 | telegraphed beam -- thin line while charging, then it fires |
+
+Bosses grow with the level, and every 5th is a **Guardian**: bigger, more guns,
+and roughly double core health.
+
+## Upgrades
+
+Twelve lines, each stacking several levels, bought with salvage between fights:
+Rail Slugs, Feed Servos, Split Barrel, Ricochet Rounds, Volatile Rounds, Seeker
+Rounds, Turret Drone, Deflector, Plating, Thrusters, Tractor Coil, Pulse
+Capacitor. Salvage and upgrades persist across runs -- dying costs you the
+fight, not the progress.
 
 ## Local use
 
@@ -42,6 +64,6 @@ Open `index.html` directly, or serve it over HTTP:
 
 then visit <http://localhost:5500>.
 
-High scores live in `localStorage`, per browser. Some browsers block storage on
-`file://` pages, so scoring falls back to memory for the session there -- serve
-it over HTTP (or use the Pages link above) if you want your best run to stick.
+Progress lives in `localStorage` under `voidsalvage:save:v2`, per browser. Some
+browsers block storage on `file://` pages, so a run there scores in memory only
+-- serve it over HTTP (or use the Pages link above) if you want it to stick.
