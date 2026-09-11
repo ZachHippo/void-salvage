@@ -155,7 +155,10 @@ function makePlayer() {
   computeStats();
   player = {
     x: canvas.width / 2, y: canvas.height * 0.75,
-    vx: 0, vy: 0, angle: -Math.PI / 2, radius: 13,
+    vx: 0, vy: 0, angle: -Math.PI / 2,
+    radius: 18,        // drawn size
+    hitRadius: 12,     // The hitbox stays tighter than the hull, the way bullet
+                       // hells do it, so a bigger ship is not a harder game.
     hull: S.maxHull, shield: S.maxShield, shieldTimer: 0,
     pulse: 0, maxPulse: 100, invuln: 0, trail: [],
   };
@@ -197,11 +200,20 @@ function makeBoss(level) {
 
   function put(r, c, kind, hp) {
     if (grid[r][c]) return null;
-    const b = { r, c, kind, hp, maxHp: hp, alive: true, flash: 0, gun: null };
+    const b = { r, c, kind, hp, maxHp: hp, alive: true, flash: 0, gun: null, seed: Math.random() };
     grid[r][c] = b;
     blocks.push(b);
     return b;
   }
+
+  // The core is laid down FIRST, so the armour pass cannot claim the centre
+  // cell -- put() refuses an occupied cell, which keeps it one block per cell.
+  // Built the other way round, the overwritten armour block stays in
+  // boss.blocks sharing the core's coordinates, and killing that phantom (the
+  // pulse and splash damage walk boss.blocks, not the grid) clears the core out
+  // of the grid: still drawn, but impossible to hit.
+  const coreHp = (28 + level * 9) * (guardian ? 2.2 : 1);
+  const core = put(midR, midC, 'core', Math.round(coreHp));
 
   // Mirrored silhouette, so every boss reads as a built machine rather than noise.
   for (let r = 0; r < rows; r++) {
@@ -214,11 +226,6 @@ function makeBoss(level) {
       if (mc !== c) put(r, mc, 'armour', armourHp);
     }
   }
-
-  // The core sits dead centre and is sealed until the armour is mostly gone.
-  const coreHp = (28 + level * 9) * (guardian ? 2.2 : 1);
-  grid[midR][midC] = null;
-  const core = put(midR, midC, 'core', Math.round(coreHp));
 
   // Guns replace armour blocks, preferring the outside where you can reach them.
   const gunCount = Math.min(11, 2 + Math.floor(level / 2) + (guardian ? 3 : 0));
@@ -289,7 +296,9 @@ function spawnParticles(x, y, color, count, speed = 120) {
 function breakBlock(b) {
   if (!b.alive) return;
   b.alive = false;
-  boss.grid[b.r][b.c] = null;
+  // Only vacate the cell if it still holds this block, so a block can never
+  // evict whatever else is standing there.
+  if (boss.grid[b.r][b.c] === b) boss.grid[b.r][b.c] = null;
   const w = blockWorld(b);
   const isCore = b.kind === 'core';
   spawnParticles(w.x, w.y, isCore ? '#9ff7ff' : (b.kind === 'gun' ? '#ff9f43' : '#b085ff'), isCore ? 60 : 14, isCore ? 340 : 130);
@@ -563,7 +572,7 @@ function update(dt) {
     f.x += f.vx * dt; f.y += f.vy * dt; f.life -= dt;
   });
   flak = flak.filter(f => {
-    if (dist(f.x, f.y, player.x, player.y) < player.radius + f.r) { hurtPlayer(9); return false; }
+    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(9); return false; }
     return f.life > 0 && f.x > -40 && f.x < canvas.width + 40 && f.y > -40 && f.y < canvas.height + 40;
   });
 
@@ -571,7 +580,7 @@ function update(dt) {
   beams.forEach(bm => {
     if (!bm.firing) return;
     const dx = Math.cos(bm.angle), dy = Math.sin(bm.angle);
-    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.radius + 7) hurtPlayer(14);
+    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(14);
   });
 
   // --- ramming the hull ---
@@ -638,35 +647,157 @@ function drawBackdrop() {
 
 const BLOCK_COLOR = { armour: '#b085ff', gun: '#ff9f43', core: '#9ff7ff' };
 
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Lighten (amt > 0) or darken (amt < 0) a #rrggbb colour.
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = i => clamp(Math.round(((n >> i) & 255) + amt * 255), 0, 255);
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+}
+
+// Cracks come off the block's own seed, so damage looks carved into that plate
+// instead of flickering a fresh pattern every frame.
+function drawCracks(b, h, hurt) {
+  const n = hurt > 0.66 ? 3 : hurt > 0.38 ? 2 : 1;
+  ctx.strokeStyle = 'rgba(6,6,16,0.7)';
+  ctx.lineWidth = 1.3;
+  for (let i = 0; i < n; i++) {
+    const a = b.seed * 6.283 + i * 2.4;
+    const ex = Math.cos(a) * h, ey = Math.sin(a) * h;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex * 0.45 + Math.cos(a + 1.7) * h * 0.3, ey * 0.45 + Math.sin(a + 1.7) * h * 0.3);
+    ctx.lineTo(-ex * 0.2, -ey * 0.2);
+    ctx.stroke();
+  }
+}
+
+// Bevelled plate: lit from the top-left, inset panel, corner rivets.
+function drawPlate(s, h, base, hurt) {
+  ctx.fillStyle = shade(base, -0.08 - hurt * 0.2);
+  roundRect(-h, -h, s, s, 4); ctx.fill();
+
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.beginPath();
+  ctx.moveTo(-h + 1.5, h - 1.5); ctx.lineTo(-h + 1.5, -h + 1.5); ctx.lineTo(h - 1.5, -h + 1.5);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath();
+  ctx.moveTo(h - 1.5, -h + 1.5); ctx.lineTo(h - 1.5, h - 1.5); ctx.lineTo(-h + 1.5, h - 1.5);
+  ctx.stroke();
+
+  ctx.fillStyle = shade(base, 0.12);
+  roundRect(-h * 0.5, -h * 0.5, s * 0.5, s * 0.5, 2); ctx.fill();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.38)';
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    ctx.beginPath(); ctx.arc(sx * (h - 4.5), sy * (h - 4.5), 1.4, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// Turrets point their barrel away from the boss centre, so you can read which
+// way a gun is facing before it fires.
+function drawGunFace(b, h, base) {
+  const l = blockLocal(b);
+  const a = Math.atan2(l.y, l.x);
+  ctx.save();
+  ctx.rotate(a);
+  ctx.fillStyle = shade(base, -0.34);
+  ctx.fillRect(h * 0.3, -3.5, h + 4, 7);
+  ctx.fillStyle = '#160a00';
+  ctx.beginPath(); ctx.arc(h * 1.3 + 4, 0, 2.8, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = shade(base, 0.28);
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(0, 0, h * 0.44, 0, Math.PI * 2); ctx.stroke();
+}
+
+function drawCoreFace(s, h, hurt, sealed) {
+  const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.5);
+  ctx.fillStyle = sealed ? '#16323a' : '#0d3a44';
+  roundRect(-h, -h, s, s, 5); ctx.fill();
+  ctx.strokeStyle = sealed ? 'rgba(159,247,255,0.5)' : '#9ff7ff';
+  ctx.lineWidth = 2;
+  roundRect(-h + 2, -h + 2, s - 4, s - 4, 4); ctx.stroke();
+
+  ctx.save();
+  ctx.rotate(elapsed * 1.3);
+  ctx.strokeStyle = `rgba(159,247,255,${sealed ? 0.4 : 0.85})`;
+  ctx.lineWidth = 1.6;
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * h * 0.5, Math.sin(a) * h * 0.5);
+    ctx.lineTo(Math.cos(a) * h * 0.8, Math.sin(a) * h * 0.8);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.shadowColor = '#9ff7ff';
+  ctx.shadowBlur = sealed ? 6 : 16 + pulse * 16;
+  ctx.fillStyle = sealed ? '#3d6f7d' : `rgb(${170 + Math.round(pulse * 70)},255,255)`;
+  ctx.beginPath(); ctx.arc(0, 0, h * 0.36 * (1 - hurt * 0.3), 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
 function drawBoss() {
   ctx.save();
   ctx.translate(boss.x, boss.y);
   ctx.rotate(boss.angle);
-  const h = boss.cell / 2;
+  const s = boss.cell - 3, h = s / 2;
+
   boss.blocks.forEach(b => {
     if (!b.alive) return;
     const l = blockLocal(b);
-    const sealed = b.kind === 'core' && boss.sealed;
     const base = BLOCK_COLOR[b.kind];
-    ctx.fillStyle = b.flash > 0 ? '#ffffff' : base;
-    ctx.globalAlpha = sealed ? 0.45 : 1;
-    ctx.shadowColor = base;
-    ctx.shadowBlur = b.kind === 'core' ? 22 : 8;
-    ctx.fillRect(l.x - h + 1.5, l.y - h + 1.5, boss.cell - 3, boss.cell - 3);
-    ctx.shadowBlur = 0;
-    // wear shows as the block loses hp
-    if (b.hp < b.maxHp) {
-      ctx.fillStyle = 'rgba(8,8,20,0.55)';
-      const frac = 1 - b.hp / b.maxHp;
-      ctx.fillRect(l.x - h + 1.5, l.y - h + 1.5, boss.cell - 3, (boss.cell - 3) * frac);
+    const sealed = b.kind === 'core' && boss.sealed;
+    const hurt = 1 - b.hp / b.maxHp;
+
+    ctx.save();
+    ctx.translate(l.x, l.y);
+    ctx.globalAlpha = sealed ? 0.55 : 1;
+
+    if (b.flash > 0) {
+      ctx.fillStyle = '#ffffff';
+      roundRect(-h, -h, s, s, 4); ctx.fill();
+    } else if (b.kind === 'core') {
+      drawCoreFace(s, h, hurt, sealed);
+    } else {
+      ctx.shadowColor = base;
+      ctx.shadowBlur = 6;
+      drawPlate(s, h, base, hurt);
+      ctx.shadowBlur = 0;
+      if (b.kind === 'gun') drawGunFace(b, h, base);
+      if (hurt > 0.12) drawCracks(b, h, hurt);
     }
-    if (b.kind === 'gun') {
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#2a1400';
-      ctx.beginPath(); ctx.arc(l.x, l.y, 4.5, 0, Math.PI * 2); ctx.fill();
-    }
+
     ctx.globalAlpha = 1;
+    ctx.restore();
   });
+
+  // An exposed core gets a halo, so it reads as the target from across the arena.
+  if (boss.core.alive && !boss.sealed) {
+    const l = blockLocal(boss.core);
+    const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.5);
+    ctx.strokeStyle = `rgba(159,247,255,${0.3 + pulse * 0.45})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(l.x, l.y, boss.cell * (1.15 + pulse * 0.45), 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = `rgba(159,247,255,${0.12 + pulse * 0.16})`;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(l.x, l.y, boss.cell * (1.7 + pulse * 0.6), 0, Math.PI * 2); ctx.stroke();
+  }
+
   ctx.restore();
 }
 
