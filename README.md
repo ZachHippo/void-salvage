@@ -15,6 +15,7 @@ before the next fight. No build step, no libraries, no network calls.
 | Fire | click, or hold to keep firing |
 | Pulse | `E`, once the pulse bar is full |
 | Pause | `P` or `Esc` |
+| Fullscreen | `F`, or the button on any menu screen |
 | Launch (hangar) | `Enter`, or click LAUNCH |
 | Reset save (hangar) | `R` |
 

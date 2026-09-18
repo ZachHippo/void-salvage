@@ -6,11 +6,16 @@
 const canvas = document.getElementById('game');
 const screenCtx = canvas.getContext('2d');
 
+// W and H are the play area in CSS pixels. The canvas backing store is W*DPR by
+// H*DPR, so on a scaled display (125%, 150%, retina) nothing is blurred by the
+// browser stretching a low-resolution canvas.
+let W = window.innerWidth, H = window.innerHeight, DPR = 1;
+
 // The world is drawn into a buffer PX times smaller than the screen, then blown
 // up with smoothing off -- every shape lands on a chunky pixel grid, the way a
 // 90s arcade board rendered. HUD text is drawn afterwards at full resolution
 // in a pixel font so it stays crisp and readable.
-const PX = 3;
+const PX = 2;
 const lowCanvas = document.createElement('canvas');
 const lowCtx = lowCanvas.getContext('2d');
 let ctx = screenCtx;             // whichever surface the draw calls target right now
@@ -21,7 +26,7 @@ function px(n) { return `${n}px "Press Start 2P", monospace`; }
 function pixelPass(draw) {
   ctx = lowCtx;
   lowCtx.setTransform(1 / PX, 0, 0, 1 / PX, 0, 0);
-  lowCtx.clearRect(0, 0, canvas.width, canvas.height);
+  lowCtx.clearRect(0, 0, W, H);
   draw();
   lowCtx.setTransform(1, 0, 0, 1, 0, 0);
   ctx = screenCtx;
@@ -245,7 +250,7 @@ let fieldW = 0, fieldH = 0;
 
 function reflowField() {
   if (!stars) return;
-  const w = canvas.width, h = canvas.height;
+  const w = W, h = H;
   if (!fieldW || !fieldH) {
     stars.forEach(s => { s.x = rand(0, w); s.y = rand(0, h); });
     nebulae.forEach(n => { n.x = rand(0, w); n.y = rand(0, h); });
@@ -256,17 +261,48 @@ function reflowField() {
     nebulae.forEach(n => { n.x *= sx; n.y *= sy; });
     if (player) { player.x *= sx; player.y *= sy; }
   }
+  if (boss) boss.cell = cellSize();
   fieldW = w; fieldH = h;
 }
 
 function resize() {
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
-  lowCanvas.width = Math.ceil(canvas.width / PX);
-  lowCanvas.height = Math.ceil(canvas.height / PX);
+  DPR = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  screenCtx.setTransform(DPR, 0, 0, DPR, 0, 0);   // resizing a canvas resets its transform
+  lowCanvas.width = Math.ceil(W / PX);
+  lowCanvas.height = Math.ceil(H / PX);
   reflowField();
 }
 window.addEventListener('resize', resize);
+document.addEventListener('fullscreenchange', resize);
+
+// Blocks scale with the screen, so a fullscreen boss fills the space it has
+// rather than sitting small in the middle of a big monitor.
+function cellSize() { return clamp(Math.round(Math.min(W, H) / 19), 32, 46); }
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
+}
+
+// The fullscreen button, bottom right on every menu screen.
+function fsButton() { return { x: W - 14 - 190, y: H - 14 - 40, w: 190, h: 40 }; }
+function drawFsButton() {
+  const b = fsButton();
+  const on = !!document.fullscreenElement;
+  panel(b.x, b.y, b.w, b.h, '#8fd0c6', 'rgba(26,32,38,0.92)');
+  ctx.textAlign = 'center';
+  ctx.font = px(8);
+  ctx.fillStyle = '#cfe9e4';
+  ctx.fillText(on ? '[F] WINDOWED' : '[F] FULLSCREEN', b.x + b.w / 2, b.y + 25);
+  ctx.textAlign = 'left';
+}
+function inRect(r, x, y) { return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h; }
 resize();
 
 // ---------- input ----------
@@ -274,7 +310,7 @@ const keys = {};
 window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 
-const mouse = { x: canvas.width / 2, y: canvas.height / 2, down: false };
+const mouse = { x: W / 2, y: H / 2, down: false };
 window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
 window.addEventListener('mousedown', () => { mouse.down = true; });
 window.addEventListener('mouseup', () => { mouse.down = false; });
@@ -283,27 +319,27 @@ window.addEventListener('mouseup', () => { mouse.down = false; });
 function makeField() {
   stars = [];
   for (let i = 0; i < 220; i++) {
-    stars.push({ x: rand(0, canvas.width), y: rand(0, canvas.height), layer: rand(0.2, 1), size: PX * (Math.random() < 0.8 ? 1 : 2), tint: Math.random() < 0.4 });
+    stars.push({ x: rand(0, W), y: rand(0, H), layer: rand(0.2, 1), size: PX * (Math.random() < 0.8 ? 1 : 2), tint: Math.random() < 0.4 });
   }
   nebulae = [];
   const colors = ['#3a1f6b', '#0f4c5c', '#5c1f4c'];
   for (let i = 0; i < 4; i++) {
     nebulae.push({
-      x: rand(0, canvas.width), y: rand(0, canvas.height), r: rand(150, 320),
+      x: rand(0, W), y: rand(0, H), r: rand(150, 320),
       color: colors[i % colors.length], dx: rand(-4, 4), dy: rand(-4, 4),
     });
   }
-  fieldW = canvas.width; fieldH = canvas.height;
+  fieldW = W; fieldH = H;
 }
 makeField();
 
 function makePlayer() {
   computeStats();
   player = {
-    x: canvas.width / 2, y: canvas.height * 0.75,
+    x: W / 2, y: H * 0.75,
     vx: 0, vy: 0, angle: -Math.PI / 2,
-    radius: 18,        // drawn size
-    hitRadius: 12,     // The hitbox stays tighter than the hull, the way bullet
+    radius: 22,        // drawn size
+    hitRadius: 14,     // The hitbox stays tighter than the hull, the way bullet
                        // hells do it, so a bigger ship is not a harder game.
     hull: S.maxHull, shield: S.maxShield, shieldTimer: 0,
     pulse: 0, maxPulse: 100, invuln: 0, trail: [],
@@ -335,7 +371,7 @@ function makeBoss(level) {
   const guardian = level % 5 === 0;
   const cols = oddClamp(5 + 2 * Math.floor((level - 1) / 3) + (guardian ? 2 : 0), 5, 13);
   const rows = oddClamp(5 + 2 * Math.floor((level - 1) / 4), 5, 11);
-  const cell = 30;
+  const cell = cellSize();
   const midC = (cols - 1) / 2, midR = (rows - 1) / 2;
   const density = 0.58 + Math.min(0.28, level * 0.015);
   const armourHp = 10 * (3 + Math.floor(level * 0.9) + (guardian ? 2 : 0));
@@ -388,7 +424,7 @@ function makeBoss(level) {
 
   const armourTotal = blocks.filter(b => b.kind !== 'core').length;
   return {
-    x: canvas.width / 2, y: canvas.height * 0.34, angle: 0,
+    x: W / 2, y: H * 0.34, angle: 0,
     spin: (Math.random() < 0.5 ? -1 : 1) * (0.10 + level * 0.012),
     t: rand(0, 10), cols, rows, cell, grid, blocks, core, level, guardian,
     armourTotal, armourLeft: armourTotal, sealed: true,
@@ -542,7 +578,7 @@ function runGun(b, dt) {
       if (g.charge <= 0) { g.state = 'idle'; g.timer = g.reload; }
     }
     if (g.state !== 'idle') {
-      beams.push({ x: w.x, y: w.y, angle: g.aim, len: Math.hypot(canvas.width, canvas.height), firing: g.state === 'fire' });
+      beams.push({ x: w.x, y: w.y, angle: g.aim, len: Math.hypot(W, H), firing: g.state === 'fire' });
     }
     return;
   }
@@ -584,7 +620,7 @@ function firePlayer() {
       x: player.x + Math.cos(a) * player.radius,
       y: player.y + Math.sin(a) * player.radius,
       vx: Math.cos(a) * S.shotSpeed, vy: Math.sin(a) * S.shotSpeed,
-      r: 4, dmg: S.damage, bounces: S.ricochet, pierce: S.pierce, last: null,
+      r: 5, dmg: S.damage, bounces: S.ricochet, pierce: S.pierce, last: null,
     });
   }
 }
@@ -600,15 +636,15 @@ function fireDrone(d) {
 function driftField(dt, vx, vy) {
   stars.forEach(s => {
     s.x -= vx * s.layer * 0.25 * dt; s.y -= vy * s.layer * 0.25 * dt;
-    if (s.x < 0) s.x += canvas.width; else if (s.x > canvas.width) s.x -= canvas.width;
-    if (s.y < 0) s.y += canvas.height; else if (s.y > canvas.height) s.y -= canvas.height;
+    if (s.x < 0) s.x += W; else if (s.x > W) s.x -= W;
+    if (s.y < 0) s.y += H; else if (s.y > H) s.y -= H;
   });
   nebulae.forEach(n => {
     n.x += n.dx * dt; n.y += n.dy * dt;
-    if (n.x < -n.r) n.x = canvas.width + n.r;
-    if (n.x > canvas.width + n.r) n.x = -n.r;
-    if (n.y < -n.r) n.y = canvas.height + n.r;
-    if (n.y > canvas.height + n.r) n.y = -n.r;
+    if (n.x < -n.r) n.x = W + n.r;
+    if (n.x > W + n.r) n.x = -n.r;
+    if (n.y < -n.r) n.y = H + n.r;
+    if (n.y > H + n.r) n.y = -n.r;
   });
 }
 
@@ -647,8 +683,8 @@ function update(dt) {
   if (sp > S.topSpeed) { player.vx = (player.vx / sp) * S.topSpeed; player.vy = (player.vy / sp) * S.topSpeed; }
   player.vx -= player.vx * 6 * dt;
   player.vy -= player.vy * 6 * dt;
-  player.x = clamp(player.x + player.vx * dt, player.radius, canvas.width - player.radius);
-  player.y = clamp(player.y + player.vy * dt, player.radius, canvas.height - player.radius);
+  player.x = clamp(player.x + player.vx * dt, player.radius, W - player.radius);
+  player.y = clamp(player.y + player.vy * dt, player.radius, H - player.radius);
   player.angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
 
   if (mag > 0) player.trail.push({ x: player.x, y: player.y, age: 0, life: 0.32 });
@@ -675,8 +711,18 @@ function update(dt) {
 
   // --- boss ---
   boss.t += dt;
-  boss.x = canvas.width / 2 + Math.sin(boss.t * 0.33) * canvas.width * 0.2;
-  boss.y = canvas.height * 0.34 + Math.sin(boss.t * 0.51) * canvas.height * 0.12;
+  // The flight path shrinks to fit the boss, so a big Guardian never drifts off
+  // the top of a short window. ext is the furthest any living block reaches while
+  // spinning, so the path also opens up as the boss is shot down.
+  let ext = 0;
+  boss.blocks.forEach(b => { if (b.alive) { const l = blockLocal(b); ext = Math.max(ext, Math.hypot(l.x, l.y)); } });
+  ext += boss.cell * 0.71;
+  const swayX = Math.min(W * 0.2, Math.max(0, W / 2 - ext - 16));
+  let midY = Math.max(H * 0.34, ext + 16 + H * 0.12);
+  let swayY = H * 0.12;
+  if (midY > H * 0.5) { midY = H * 0.5; swayY = Math.max(0, midY - ext - 16); }
+  boss.x = W / 2 + Math.sin(boss.t * 0.33) * swayX;
+  boss.y = midY + Math.sin(boss.t * 0.51) * swayY;
   boss.angle += boss.spin * dt;
   boss.blocks.forEach(b => {
     if (!b.alive) return;
@@ -708,8 +754,8 @@ function update(dt) {
     }
     s.x += s.vx * dt; s.y += s.vy * dt;
     if (s.bounces > 0) {
-      if (s.x < 0 || s.x > canvas.width) { s.vx *= -1; s.x = clamp(s.x, 0, canvas.width); s.bounces--; }
-      if (s.y < 0 || s.y > canvas.height) { s.vy *= -1; s.y = clamp(s.y, 0, canvas.height); s.bounces--; }
+      if (s.x < 0 || s.x > W) { s.vx *= -1; s.x = clamp(s.x, 0, W); s.bounces--; }
+      if (s.y < 0 || s.y > H) { s.vy *= -1; s.y = clamp(s.y, 0, H); s.bounces--; }
     }
   });
   shots = shots.filter(s => {
@@ -725,7 +771,7 @@ function update(dt) {
       if (s.pierce > 0) { s.pierce--; s.last = hit; }
       else return false;
     }
-    return s.x > -30 && s.x < canvas.width + 30 && s.y > -30 && s.y < canvas.height + 30;
+    return s.x > -30 && s.x < W + 30 && s.y > -30 && s.y < H + 30;
   });
   if (mode !== 'fight') return;   // core just blew
 
@@ -743,7 +789,7 @@ function update(dt) {
   });
   flak = flak.filter(f => {
     if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(9); return false; }
-    return f.life > 0 && f.x > -40 && f.x < canvas.width + 40 && f.y > -40 && f.y < canvas.height + 40;
+    return f.life > 0 && f.x > -40 && f.x < W + 40 && f.y > -40 && f.y < H + 40;
   });
 
   // --- beams ---
@@ -801,10 +847,10 @@ function updateIdle(dt) { titleTime += dt; driftField(dt, 40, 14); }
 
 // ---------- draw ----------
 function drawBackdrop() {
-  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, '#140a18'); g.addColorStop(1, '#1f0e22');
   ctx.fillStyle = g;
-  ctx.fillRect(-40, -40, canvas.width + 80, canvas.height + 80);
+  ctx.fillRect(-40, -40, W + 80, H + 80);
   nebulae.forEach(n => {
     const rg = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r);
     rg.addColorStop(0, n.color + '33'); rg.addColorStop(1, n.color + '00');
@@ -1011,7 +1057,7 @@ function panel(x, y, w, h, border, fill) {
 
 function scanlines() {
   ctx.fillStyle = 'rgba(0,0,0,0.13)';
-  for (let y = 0; y < canvas.height; y += PX * 2) ctx.fillRect(0, y, canvas.width, PX);
+  for (let y = 0; y < H; y += PX * 2) ctx.fillRect(0, y, W, PX);
 }
 
 // ---------- fight ----------
@@ -1056,23 +1102,23 @@ function drawWorld() {
   });
   ctx.globalAlpha = 1;
 
-  orbs.forEach(o => pixelIcon(o.x, o.y, o.cur, PX));
+  orbs.forEach(o => pixelIcon(o.x, o.y, o.cur, PX * 2));
 
   flak.forEach(f => {
     ctx.fillStyle = f.color;
-    ctx.beginPath(); ctx.arc(f.x, f.y, f.r + 1, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 1.3 + 1, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#fff4f6';
-    ctx.fillRect(f.x - 1.5, f.y - 1.5, 3, 3);
+    ctx.fillRect(f.x - 2, f.y - 2, 4, 4);
   });
 
   ctx.fillStyle = '#ffd166';
-  shots.forEach(s => ctx.fillRect(s.x - 3, s.y - 3, 6, 6));
+  shots.forEach(s => ctx.fillRect(s.x - 4, s.y - 4, 8, 8));
 
   drones.forEach(d => {
     ctx.fillStyle = '#4dd06a';
-    ctx.fillRect(d.x - 6, d.y - 6, 12, 12);
+    ctx.fillRect(d.x - 8, d.y - 8, 16, 16);
     ctx.fillStyle = '#b6ffc6';
-    ctx.fillRect(d.x - 3, d.y - 3, 6, 6);
+    ctx.fillRect(d.x - 4, d.y - 4, 8, 8);
   });
 
   // ship: hull, cockpit, and an engine flare that flickers while thrusting
@@ -1111,7 +1157,7 @@ function drawWorld() {
 
 function drawPopups() {
   ctx.textAlign = 'center';
-  ctx.font = px(10);
+  ctx.font = px(12);
   popups.forEach(p => {
     const a = 1 - p.age / p.life;
     const y = p.y - p.age * 45;
@@ -1130,7 +1176,7 @@ function drawFight() {
   drawPopups();
   if (hitFlash > 0) {
     ctx.fillStyle = `rgba(255,60,60,${hitFlash * 0.3})`;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, W, H);
   }
   scanlines();
   drawHUD();
@@ -1170,7 +1216,7 @@ function drawHUD() {
   row('PULSE', player.pulse / player.maxPulse, '#9a55d8', player.pulse >= player.maxPulse ? 'PRESS E' : null);
 
   // fight panel, top right: which fight, how sealed, and this run's haul
-  const pw = 262, x0 = canvas.width - pw - 14;
+  const pw = 262, x0 = W - pw - 14;
   panel(x0, 14, pw, 116);
   ctx.textAlign = 'center';
   ctx.font = px(12);
@@ -1191,20 +1237,20 @@ function drawHUD() {
   ctx.textAlign = 'left';
   ctx.font = px(7);
   ctx.fillStyle = 'rgba(207,233,228,0.55)';
-  ctx.fillText('WASD MOVE   MOUSE AIM   CLICK FIRE   E PULSE   P PAUSE', 18, canvas.height - 16);
+  ctx.fillText('WASD MOVE   MOUSE AIM   CLICK FIRE   E PULSE   P PAUSE   F FULLSCREEN', 18, H - 16);
 }
 
 function drawPaused() {
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  panel(canvas.width / 2 - 170, canvas.height / 2 - 60, 340, 110);
+  ctx.fillRect(0, 0, W, H);
+  panel(W / 2 - 170, H / 2 - 60, 340, 110);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
   ctx.font = px(22);
-  ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2 - 6);
+  ctx.fillText('PAUSED', W / 2, H / 2 - 6);
   ctx.font = px(8);
   ctx.fillStyle = '#9fd3cc';
-  ctx.fillText('P OR ESC TO RESUME', canvas.width / 2, canvas.height / 2 + 28);
+  ctx.fillText('P OR ESC TO RESUME', W / 2, H / 2 + 28);
   ctx.textAlign = 'left';
 }
 
@@ -1212,7 +1258,7 @@ function drawPaused() {
 function walletRow(cy, wallet, prefix, cell) {
   cell = cell || 4;
   const colW = 150;
-  const left = canvas.width / 2 - (colW * CUR_ORDER.length) / 2;
+  const left = W / 2 - (colW * CUR_ORDER.length) / 2;
   CUR_ORDER.forEach((k, i) => {
     const x = left + i * colW + 24;
     pixelIcon(x, cy, k, cell);
@@ -1228,8 +1274,8 @@ function walletRow(cy, wallet, prefix, cell) {
 // renderer and the click handler, so what you see is exactly what you can click.
 function hangarLayout() {
   const top = 96, bottom = 34;
-  const unit = Math.max(40, Math.min((canvas.width - 60) / 11.6, (canvas.height - top - bottom) / 9.4));
-  const cx = canvas.width / 2;
+  const unit = Math.max(40, Math.min((W - 60) / 11.6, (H - top - bottom) / 9.4));
+  const cx = W / 2;
   const cy = top + 5 * unit;
   const size = Math.round(unit * 0.66);
   const nodes = UPGRADES.map(up => {
@@ -1278,8 +1324,8 @@ function costRow(cost, rightX, baseY, dim) {
 function drawTooltip(n) {
   const w = 320, h = 128;
   let x = n.x + n.size / 2 + 14;
-  if (x + w > canvas.width - 10) x = n.x - n.size / 2 - 14 - w;
-  const y = clamp(n.y - h / 2, 10, canvas.height - h - 10);
+  if (x + w > W - 10) x = n.x - n.size / 2 - 14 - w;
+  const y = clamp(n.y - h / 2, 10, H - h - 10);
   const st = nodeStyle(n);
   panel(x, y, w, h, st.border, 'rgba(18,22,28,0.97)');
 
@@ -1315,7 +1361,7 @@ function drawTooltip(n) {
 function drawHangar() {
   pixelPass(drawBackdrop);
   ctx.fillStyle = 'rgba(12,6,16,0.5)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, W, H);
   scanlines();
 
   const { nodes, fight, cx, cy } = hangarLayout();
@@ -1383,14 +1429,14 @@ function drawHangar() {
   ctx.textAlign = 'center';
   ctx.font = px(22);
   ctx.fillStyle = '#e0444f';
-  ctx.fillText('HANGAR', canvas.width / 2 + 3, 49);
+  ctx.fillText('HANGAR', W / 2 + 3, 49);
   ctx.fillStyle = '#ffffff';
-  ctx.fillText('HANGAR', canvas.width / 2, 46);
+  ctx.fillText('HANGAR', W / 2, 46);
   ctx.font = px(7);
   ctx.fillStyle = '#9fd3cc';
-  ctx.fillText(`BEST LEVEL ${save.bestLevel}`, canvas.width / 2, 70);
+  ctx.fillText(`BEST LEVEL ${save.bestLevel}`, W / 2, 70);
 
-  const sx = canvas.width - 14 - 330;
+  const sx = W - 14 - 330;
   panel(sx, 14, 330, 66);
   ctx.textAlign = 'left';
   ctx.font = px(7);
@@ -1410,9 +1456,10 @@ function drawHangar() {
   ctx.textAlign = 'center';
   ctx.font = px(7);
   ctx.fillStyle = 'rgba(207,233,228,0.5)';
-  ctx.fillText('HOVER A NODE FOR DETAILS  -  GREEN = YOU CAN AFFORD IT  -  CLICK TO BUY  -  ENTER TO FIGHT  -  R RESETS SAVE',
-               canvas.width / 2, canvas.height - 14);
+  ctx.fillText('HOVER A NODE FOR DETAILS  -  GREEN = YOU CAN AFFORD IT  -  CLICK TO BUY  -  ENTER TO FIGHT  -  F FULLSCREEN  -  R RESETS SAVE',
+               W / 2, H - 14);
 
+  drawFsButton();
   if (hover) drawTooltip(hover);
   ctx.textAlign = 'left';
 }
@@ -1439,10 +1486,10 @@ function centreText(lines, topY) {
     ctx.font = l.font || px(10);
     if (l.drop) {
       ctx.fillStyle = l.drop;
-      ctx.fillText(l.text, canvas.width / 2 + 4, y + 4);
+      ctx.fillText(l.text, W / 2 + 4, y + 4);
     }
     ctx.fillStyle = l.color || '#f4f2ff';
-    ctx.fillText(l.text, canvas.width / 2, y);
+    ctx.fillText(l.text, W / 2, y);
     y += l.gap || 26;
   });
   ctx.textAlign = 'left';
@@ -1452,9 +1499,9 @@ function centreText(lines, topY) {
 function drawTitle() {
   pixelPass(drawBackdrop);
   ctx.fillStyle = 'rgba(12,6,16,0.45)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, W, H);
   scanlines();
-  const cy = canvas.height / 2;
+  const cy = H / 2;
   let y = centreText([
     { text: 'VOID SALVAGE', font: px(40), drop: '#e0444f', gap: 60 },
     { text: 'ONE SHIP AGAINST BOSSES BUILT FROM BLOCKS', color: '#cfe9e4', gap: 24 },
@@ -1471,13 +1518,14 @@ function drawTitle() {
   if (Math.floor(titleTime * 2) % 2 === 0) {
     centreText([{ text: 'PRESS ANY KEY', color: '#ffd84a', font: px(14) }], y + 10);
   }
+  drawFsButton();
 }
 
 function drawEndScreen(title, titleColor, subtitle, prompt) {
   pixelPass(drawFightBackdropStill);
   scanlines();
-  const cy = canvas.height / 2;
-  panel(canvas.width / 2 - 300, cy - 130, 600, 250);
+  const cy = H / 2;
+  panel(W / 2 - 300, cy - 130, 600, 250);
   let y = centreText([
     { text: title, font: px(26), color: titleColor, drop: '#1a0d1e', gap: 44 },
     { text: subtitle, color: '#cfe9e4', font: px(9), gap: 42 },
@@ -1506,7 +1554,7 @@ function drawFightBackdropStill() {
   });
   ctx.globalAlpha = 1;
   ctx.fillStyle = 'rgba(8,4,12,0.6)';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, W, H);
 }
 
 // ---------- loop ----------
@@ -1534,6 +1582,7 @@ function loop(timestamp) {
 // ---------- flow ----------
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
+  if (k === 'f') { toggleFullscreen(); return; }
   if (mode === 'title') { mode = 'hangar'; return; }
   if (mode === 'cleared' || mode === 'dead') { mode = 'hangar'; return; }
   if (mode === 'hangar') {
@@ -1545,6 +1594,7 @@ window.addEventListener('keydown', e => {
 });
 
 window.addEventListener('click', e => {
+  if (mode !== 'fight' && inRect(fsButton(), e.clientX, e.clientY)) { toggleFullscreen(); return; }
   if (mode === 'title') { mode = 'hangar'; return; }
   if (mode === 'cleared' || mode === 'dead') { mode = 'hangar'; return; }
   if (mode === 'hangar') hangarClick(e.clientX, e.clientY);
