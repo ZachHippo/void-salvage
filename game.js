@@ -24,9 +24,9 @@ function glowOff() { ctx.shadowBlur = 0; }
 // Blocks pay out in the colour they are: blue armour drops blue orbs, red guns
 // drop red shards, and only a core drops white crystals.
 const CUR = {
-  white: { color: '#eaf6ff', shape: 'diamond' },
-  red:   { color: '#ff6b9f', shape: 'diamond' },
-  blue:  { color: '#8b7dff', shape: 'circle' },
+  white: { color: '#eaf6ff', shape: 'star' },
+  red:   { color: '#ff4a4a', shape: 'diamond' },
+  blue:  { color: '#3f8cff', shape: 'hex' },
 };
 const CUR_ORDER = ['white', 'red', 'blue'];
 function emptyWallet() { return { white: 0, red: 0, blue: 0 }; }
@@ -299,8 +299,19 @@ resize();
 
 // ---------- input ----------
 const keys = {};
-window.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; });
-window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+// Letters are tracked by physical key (e.code), so a held D stays the same key
+// whatever Shift or the keyboard layout does between keydown and keyup.
+function keyName(e) { return e.code && e.code.startsWith('Key') ? e.code.slice(3).toLowerCase() : e.key.toLowerCase(); }
+window.addEventListener('keydown', e => { keys[keyName(e)] = true; });
+window.addEventListener('keyup', e => { keys[keyName(e)] = false; });
+
+// If the page loses focus mid-press -- alt-tab, entering or leaving fullscreen,
+// a screenshot tool -- the browser never sends the keyup, and the ship would
+// keep thrusting that way forever. Drop every held input instead.
+function releaseAll() { for (const k in keys) keys[k] = false; mouse.down = false; }
+window.addEventListener('blur', releaseAll);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+document.addEventListener('fullscreenchange', releaseAll);
 
 const mouse = { x: W / 2, y: H / 2, down: false };
 window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
@@ -351,11 +362,12 @@ const GUN_UNLOCK = [
 
 function makeGun(type, level) {
   const g = { type, timer: rand(0.4, 2), phase: rand(0, Math.PI * 2), state: 'idle', charge: 0 };
-  if (type === 'aimed')  g.reload = Math.max(0.55, 1.5 - level * 0.04);
-  if (type === 'spread') g.reload = Math.max(1.3, 2.6 - level * 0.05);
-  if (type === 'spiral') g.reload = 0.13;
-  if (type === 'seeker') g.reload = Math.max(1.8, 3.2 - level * 0.06);
-  if (type === 'laser')  g.reload = Math.max(2.4, 4.2 - level * 0.07);
+  // Reloads run about 12% faster than they used to.
+  if (type === 'aimed')  g.reload = Math.max(0.5, 1.32 - level * 0.035);
+  if (type === 'spread') g.reload = Math.max(1.15, 2.3 - level * 0.045);
+  if (type === 'spiral') g.reload = 0.12;
+  if (type === 'seeker') g.reload = Math.max(1.6, 2.8 - level * 0.055);
+  if (type === 'laser')  g.reload = Math.max(2.1, 3.7 - level * 0.06);
   return g;
 }
 
@@ -449,6 +461,7 @@ function blockAtWorld(x, y) {
 
 // ---------- fight lifecycle ----------
 function startFight(level) {
+  releaseAll();
   makePlayer();
   const L = clamp(level || save.selected, 1, save.level);
   boss = makeBoss(L);
@@ -470,6 +483,27 @@ function spawnParticles(x, y, color, count, speed = 120) {
   }
 }
 
+// Rewards climb steeply with the level: each level is worth 15% more than the
+// one before on top of the linear growth, so a level-20 boss pays roughly 80x
+// a level-1 boss and replaying hard levels is the way to farm.
+function rewardScale(L) { return Math.pow(1.15, L - 1); }
+
+// What a block pays when it breaks: a list of { cur, n orbs, value each }.
+function blockPayout(b) {
+  const L = boss.level, k = rewardScale(L);
+  const val = (cur, v) => Math.max(1, Math.round(v * k * (S.yield[cur] || 1)));
+  if (b.kind === 'armour') return [{ cur: 'blue', n: 2, value: val('blue', (2 + L * 0.8) / 2) }];
+  if (b.kind === 'gun')    return [{ cur: 'red', n: 3, value: val('red', (6 + L * 2.4) / 3) }];
+  const g = boss.guardian ? 2 : 1;
+  const out = [
+    { cur: 'red', n: 6, value: val('red', (20 + L * 6) * g / 6) },
+    { cur: 'blue', n: 6, value: val('blue', (20 + L * 6) * g / 6) },
+  ];
+  // White crystals are the first-clear reward, and they scale with the level too.
+  if (boss.firstClear) out.push({ cur: 'white', n: 3 + L * g + S.whiteBonus, value: 1 });
+  return out;
+}
+
 function breakBlock(b) {
   if (!b.alive) return;
   b.alive = false;
@@ -482,23 +516,12 @@ function breakBlock(b) {
   shake = Math.max(shake, isCore ? 30 : 5);
 
   // Every block pays out, in its own colour.
-  const L = boss.level;
-  const drop = (cur, n, value) => {
-    for (let i = 0; i < n; i++) {
+  blockPayout(b).forEach(p => {
+    for (let i = 0; i < p.n; i++) {
       orbs.push({ x: w.x + rand(-8, 8), y: w.y + rand(-8, 8), vx: rand(-80, 80), vy: rand(-80, 80),
-                  r: 5, cur, value: Math.max(1, Math.round(value * (S.yield[cur] || 1))) });
+                  r: 5, cur: p.cur, value: p.value });
     }
-  };
-  if (b.kind === 'armour') drop('blue', 2, (2 + L * 0.8) / 2);
-  if (b.kind === 'gun')    drop('red', 3, (6 + L * 2.4) / 3);
-  if (isCore) {
-    const g = boss.guardian ? 2 : 1;
-    // White crystals are the first-clear reward. Replays still pay red and blue,
-    // and those scale with the level, so farming a harder boss pays more.
-    if (boss.firstClear) drop('white', 3 + Math.floor(L / 2) * g + S.whiteBonus, 1);
-    drop('red', 6, (20 + L * 6) * g / 6);
-    drop('blue', 6, (20 + L * 6) * g / 6);
-  }
+  });
 
   if (isCore) {
     clearFight();
@@ -537,6 +560,11 @@ function clearFight() {
   // salvaged for you. (Dying does not: uncollected orbs are the risk.)
   orbs.forEach(o => { runWallet[o.cur] += o.value; });
   orbs = [];
+  // Blocks still standing when the core blows are salvaged at full value too.
+  boss.blocks.forEach(b => {
+    if (!b.alive || b.kind === 'core') return;
+    blockPayout(b).forEach(p => { runWallet[p.cur] += p.n * p.value; });
+  });
   bankRun();
   save.clears++;
   if (boss.firstClear) {
@@ -558,7 +586,7 @@ function failFight() {
 
 // ---------- enemy fire ----------
 function addFlak(x, y, angle, speed, r, color, homing) {
-  flak.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r, color: color || '#ff5470', homing: homing || 0, life: 9 });
+  flak.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r, color: color || '#ff9a1f', homing: homing || 0, life: 9 });
 }
 
 function runGun(b, dt) {
@@ -584,21 +612,27 @@ function runGun(b, dt) {
 
   if (g.timer > 0) return;
   g.timer = g.reload;
+  // Every enemy round is a big orange bolt, so danger reads at a glance.
   if (g.type === 'aimed') {
-    addFlak(w.x, w.y, toPlayer, 260, 5);
+    // a pair, widening to a three-round fan from level 6
+    const offs = boss.level >= 6 ? [-0.14, 0, 0.14] : [-0.08, 0.08];
+    offs.forEach(o => addFlak(w.x, w.y, toPlayer + o, 285, 7));
   } else if (g.type === 'spread') {
-    const n = 8;
-    for (let i = 0; i < n; i++) addFlak(w.x, w.y, outward + (Math.PI * 2 * i) / n, 200, 5, '#ff7ab0');
+    const n = 10;
+    for (let i = 0; i < n; i++) addFlak(w.x, w.y, outward + (Math.PI * 2 * i) / n, 215, 7);
   } else if (g.type === 'spiral') {
     g.phase += 0.55;
-    addFlak(w.x, w.y, g.phase, 205, 4.5, '#ffa8d8');
+    addFlak(w.x, w.y, g.phase, 220, 6);
+    addFlak(w.x, w.y, g.phase + Math.PI, 220, 6);   // two arms
   } else if (g.type === 'seeker') {
-    addFlak(w.x, w.y, outward, 130, 6, '#ff4d4d', 2.2);
+    addFlak(w.x, w.y, outward - 0.4, 140, 8, '#ff7a1a', 2.2);
+    addFlak(w.x, w.y, outward + 0.4, 140, 8, '#ff7a1a', 2.2);
   }
 }
 
 // ---------- player fire ----------
 function nearestBlock(x, y) {
+  if (!boss.sealed && boss.core.alive) return blockWorld(boss.core);   // seekers and drones go for it too
   let best = null, bd = Infinity;
   boss.blocks.forEach(b => {
     if (!b.alive) return;
@@ -758,14 +792,17 @@ function update(dt) {
     }
   });
   shots = shots.filter(s => {
-    const hit = blockAtWorld(s.x, s.y);
+    let hit = blockAtWorld(s.x, s.y);
+    // Once the core is exposed, rounds pass straight through the remaining
+    // blocks: only the core can stop them, so it is always hittable.
+    if (hit && !boss.sealed && hit.kind !== 'core') hit = null;
     if (hit && hit !== s.last) {
       let dmg = s.dmg * (hit.kind === 'gun' ? S.gunMult : hit.kind === 'core' ? S.coreMult : 1);
       const crit = Math.random() < S.crit;
       if (crit) dmg *= 2;
       damageBlock(hit, dmg, crit);
       if (S.splash) splashDamage(s.x, s.y, S.splash, s.dmg * 0.5);
-      spawnParticles(s.x, s.y, '#ffd166', 5, 90);
+      spawnParticles(s.x, s.y, '#7fe9ff', 5, 90);
       // a penetrator round keeps going, but never re-hits the block it is inside
       if (s.pierce > 0) { s.pierce--; s.last = hit; }
       else return false;
@@ -787,7 +824,7 @@ function update(dt) {
     f.x += f.vx * dt; f.y += f.vy * dt; f.life -= dt;
   });
   flak = flak.filter(f => {
-    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(9); return false; }
+    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(11); return false; }
     return f.life > 0 && f.x > -40 && f.x < W + 40 && f.y > -40 && f.y < H + 40;
   });
 
@@ -795,7 +832,7 @@ function update(dt) {
   beams.forEach(bm => {
     if (!bm.firing) return;
     const dx = Math.cos(bm.angle), dy = Math.sin(bm.angle);
-    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(14);
+    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(16);
   });
 
   // --- ramming the hull ---
@@ -862,7 +899,7 @@ function drawBackdrop() {
   });
 }
 
-const BLOCK_COLOR = { armour: '#8b7dff', gun: '#ff6b9f', core: '#9ff7ff' };
+const BLOCK_COLOR = { armour: '#3f8cff', gun: '#ff4a4a', core: '#9ff7ff' };
 
 function roundRect(x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -900,31 +937,40 @@ function drawCracks(b, h, hurt) {
 }
 
 // Bevelled plate: lit from the top-left, inset panel, corner rivets.
+// Geometric plate: a sharp tile, bevelled edges, an inset diamond and a hard
+// centre facet. Damage darkens the body.
 function drawPlate(s, h, base, hurt) {
-  ctx.fillStyle = shade(base, -0.08 - hurt * 0.2);
-  roundRect(-h, -h, s, s, 4); ctx.fill();
+  ctx.fillStyle = shade(base, -0.1 - hurt * 0.22);
+  ctx.fillRect(-h, -h, s, s);
 
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
   ctx.beginPath();
-  ctx.moveTo(-h + 1.5, h - 1.5); ctx.lineTo(-h + 1.5, -h + 1.5); ctx.lineTo(h - 1.5, -h + 1.5);
+  ctx.moveTo(-h + 1, h - 1); ctx.lineTo(-h + 1, -h + 1); ctx.lineTo(h - 1, -h + 1);
   ctx.stroke();
-  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
   ctx.beginPath();
-  ctx.moveTo(h - 1.5, -h + 1.5); ctx.lineTo(h - 1.5, h - 1.5); ctx.lineTo(-h + 1.5, h - 1.5);
+  ctx.moveTo(h - 1, -h + 1); ctx.lineTo(h - 1, h - 1); ctx.lineTo(-h + 1, h - 1);
   ctx.stroke();
 
-  ctx.fillStyle = shade(base, 0.12);
-  roundRect(-h * 0.5, -h * 0.5, s * 0.5, s * 0.5, 2); ctx.fill();
+  const d = h * 0.62;
+  ctx.fillStyle = shade(base, 0.14);
+  ctx.beginPath();
+  ctx.moveTo(0, -d); ctx.lineTo(d, 0); ctx.lineTo(0, d); ctx.lineTo(-d, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = shade(base, 0.35);
+  ctx.lineWidth = 1;
+  ctx.stroke();
 
-  ctx.fillStyle = 'rgba(0,0,0,0.38)';
-  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-    ctx.beginPath(); ctx.arc(sx * (h - 4.5), sy * (h - 4.5), 1.4, 0, Math.PI * 2); ctx.fill();
-  }
+  ctx.fillStyle = shade(base, -0.25);
+  ctx.fillRect(-h * 0.16, -h * 0.16, h * 0.32, h * 0.32);
 }
 
 // Turrets point their barrel away from the boss centre, so you can read which
 // way a gun is facing before it fires.
+// Turrets point their barrel away from the boss centre, so you can read which
+// way a gun is facing before it fires. The housing is a hexagon.
 function drawGunFace(b, h, base) {
   const l = blockLocal(b);
   const a = Math.atan2(l.y, l.x);
@@ -932,38 +978,39 @@ function drawGunFace(b, h, base) {
   ctx.rotate(a);
   ctx.fillStyle = shade(base, -0.34);
   ctx.fillRect(h * 0.3, -3.5, h + 4, 7);
-  ctx.fillStyle = '#160a00';
-  ctx.beginPath(); ctx.arc(h * 1.3 + 4, 0, 2.8, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1a0000';
+  ctx.fillRect(h * 1.3 + 1, -3, 6, 6);
   ctx.restore();
-  ctx.strokeStyle = shade(base, 0.28);
+  ctx.strokeStyle = shade(base, 0.35);
   ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(0, 0, h * 0.44, 0, Math.PI * 2); ctx.stroke();
+  polyPath(0, 0, h * 0.5, 6, 0);
+  ctx.stroke();
 }
 
 function drawCoreFace(s, h, hurt, sealed) {
   const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.5);
   ctx.fillStyle = sealed ? '#16323a' : '#0d3a44';
-  roundRect(-h, -h, s, s, 5); ctx.fill();
+  ctx.fillRect(-h, -h, s, s);
   ctx.strokeStyle = sealed ? 'rgba(159,247,255,0.5)' : '#9ff7ff';
   ctx.lineWidth = 2;
-  roundRect(-h + 2, -h + 2, s - 4, s - 4, 4); ctx.stroke();
+  ctx.strokeRect(-h + 2, -h + 2, s - 4, s - 4);
 
+  // a rotating diamond frame
   ctx.save();
   ctx.rotate(elapsed * 1.3);
   ctx.strokeStyle = `rgba(159,247,255,${sealed ? 0.4 : 0.85})`;
   ctx.lineWidth = 1.6;
-  for (let i = 0; i < 4; i++) {
-    const a = (i * Math.PI) / 2;
-    ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * h * 0.5, Math.sin(a) * h * 0.5);
-    ctx.lineTo(Math.cos(a) * h * 0.8, Math.sin(a) * h * 0.8);
-    ctx.stroke();
-  }
+  ctx.strokeRect(-h * 0.55, -h * 0.55, h * 1.1, h * 1.1);
   ctx.restore();
 
+  // hot centre: a glowing diamond that shrinks as the core takes damage
   glowOn('#9ff7ff', sealed ? 6 : 16 + pulse * 16);
   ctx.fillStyle = sealed ? '#3d6f7d' : `rgb(${170 + Math.round(pulse * 70)},255,255)`;
-  ctx.beginPath(); ctx.arc(0, 0, h * 0.36 * (1 - hurt * 0.3), 0, Math.PI * 2); ctx.fill();
+  const d = h * 0.42 * (1 - hurt * 0.3);
+  ctx.beginPath();
+  ctx.moveTo(0, -d); ctx.lineTo(d, 0); ctx.lineTo(0, d); ctx.lineTo(-d, 0);
+  ctx.closePath();
+  ctx.fill();
   glowOff();
 }
 
@@ -986,7 +1033,7 @@ function drawBoss() {
 
     if (b.flash > 0) {
       ctx.fillStyle = '#ffffff';
-      roundRect(-h, -h, s, s, 4); ctx.fill();
+      ctx.fillRect(-h, -h, s, s);
     } else if (b.kind === 'core') {
       drawCoreFace(s, h, hurt, sealed);
     } else {
@@ -1007,10 +1054,10 @@ function drawBoss() {
     const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.5);
     ctx.strokeStyle = `rgba(159,247,255,${0.3 + pulse * 0.45})`;
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(l.x, l.y, boss.cell * (1.15 + pulse * 0.45), 0, Math.PI * 2); ctx.stroke();
+    polyPath(l.x, l.y, boss.cell * (1.15 + pulse * 0.45), 6, elapsed * 0.6); ctx.stroke();
     ctx.strokeStyle = `rgba(159,247,255,${0.12 + pulse * 0.16})`;
     ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.arc(l.x, l.y, boss.cell * (1.7 + pulse * 0.6), 0, Math.PI * 2); ctx.stroke();
+    polyPath(l.x, l.y, boss.cell * (1.7 + pulse * 0.6), 6, -elapsed * 0.4); ctx.stroke();
   }
 
   ctx.restore();
@@ -1018,32 +1065,60 @@ function drawBoss() {
 
 // ---------- icons and panels ----------
 CUR.white.text = '#eaf6ff';
-CUR.red.text = '#ff8fb8';
-CUR.blue.text = '#b0a6ff';
+CUR.red.text = '#ff7a7a';
+CUR.blue.text = '#7fb2ff';
 
 // Currency icon: a glowing diamond or orb. `cell` keeps the old sizing scale.
+// Regular polygon path, centred on (x, y).
+function polyPath(x, y, r, sides, rot) {
+  ctx.beginPath();
+  for (let i = 0; i < sides; i++) {
+    const a = rot + (i / sides) * Math.PI * 2;
+    ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+  }
+  ctx.closePath();
+}
+
+// Currency icons are hard geometric shapes: red diamond, blue hexagon, white
+// four-point star. `cell` keeps the old sizing scale.
 function currencyIcon(x, y, cur, cell) {
   const r = cell * 3.2, c = CUR[cur];
   ctx.save();
   glowOn(c.color, r * 1.2);
   ctx.fillStyle = c.color;
-  ctx.beginPath();
   if (c.shape === 'diamond') {
-    ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.72, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r * 0.72, y);
+    ctx.beginPath();
+    ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.7, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r * 0.7, y);
     ctx.closePath();
+  } else if (c.shape === 'hex') {
+    polyPath(x, y, r * 0.88, 6, Math.PI / 6);
   } else {
-    ctx.arc(x, y, r * 0.82, 0, Math.PI * 2);
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a = -Math.PI / 2 + (i / 8) * Math.PI * 2;
+      const rr = i % 2 === 0 ? r : r * 0.36;
+      ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+    }
+    ctx.closePath();
   }
   ctx.fill();
   glowOff();
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.beginPath(); ctx.arc(x - r * 0.2, y - r * 0.28, r * 0.18, 0, Math.PI * 2); ctx.fill();
+  // a single hard facet highlight
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(x - r * 0.35, y - r * 0.05); ctx.lineTo(x, y - r * 0.5); ctx.stroke();
   ctx.restore();
 }
 
 // Translucent rounded panel with a thin neon edge, shared by HUD and menus.
+// Chamfered panel with a thin neon edge, shared by the HUD and menus.
 function panel(x, y, w, h, border, fill) {
-  roundRect(x, y, w, h, 8);
+  const c = Math.min(10, w / 4, h / 4);
+  ctx.beginPath();
+  ctx.moveTo(x + c, y); ctx.lineTo(x + w - c, y); ctx.lineTo(x + w, y + c);
+  ctx.lineTo(x + w, y + h - c); ctx.lineTo(x + w - c, y + h); ctx.lineTo(x + c, y + h);
+  ctx.lineTo(x, y + h - c); ctx.lineTo(x, y + c);
+  ctx.closePath();
   ctx.fillStyle = fill || 'rgba(10,12,24,0.82)';
   ctx.fill();
   ctx.strokeStyle = border || 'rgba(127,216,255,0.45)';
@@ -1052,6 +1127,33 @@ function panel(x, y, w, h, border, fill) {
 }
 
 // ---------- fight ----------
+// Health bars sit flat over each damaged block (not rotated with the boss) so
+// they stay readable, with a dark frame and a green-yellow-red fill. The core
+// gets a wider bar above it.
+function drawBlockBars() {
+  const c = boss.cell;
+  boss.blocks.forEach(b => {
+    if (!b.alive || b.kind === 'core' || b.hp >= b.maxHp) return;
+    const p = blockWorld(b);
+    const w = c * 0.8, h = 6, f = clamp(b.hp / b.maxHp, 0, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+    ctx.fillRect(p.x - w / 2 - 2, p.y - h / 2 - 2, w + 4, h + 4);
+    ctx.fillStyle = f > 0.6 ? '#4dff88' : f > 0.3 ? '#ffd84a' : '#ff4a4a';
+    ctx.fillRect(p.x - w / 2, p.y - h / 2, w * f, h);
+  });
+  const core = boss.core;
+  if (core.alive && (!boss.sealed || core.hp < core.maxHp)) {
+    const p = blockWorld(core);
+    const w = c * 2.2, h = 8, y = p.y - c * 1.05, f = clamp(core.hp / core.maxHp, 0, 1);
+    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+    ctx.fillRect(p.x - w / 2 - 2, y - h / 2 - 2, w + 4, h + 4);
+    glowOn('#9ff7ff', 10);
+    ctx.fillStyle = '#9ff7ff';
+    ctx.fillRect(p.x - w / 2, y - h / 2, w * f, h);
+    glowOff();
+  }
+}
+
 function drawWorld() {
   ctx.save();
   if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
@@ -1061,23 +1163,25 @@ function drawWorld() {
   player.trail.forEach(p => {
     const a = 1 - p.age / p.life;
     ctx.fillStyle = `rgba(120,200,255,${a * 0.5})`;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 5 * a, 0, Math.PI * 2); ctx.fill();
+    const q = 8 * a;
+    ctx.fillRect(p.x - q / 2, p.y - q / 2, q, q);
   });
 
   if (pulseRing) {
     const a = 1 - pulseRing.age / pulseRing.life;
     ctx.strokeStyle = `rgba(159,247,255,${a * 0.9})`;
     ctx.lineWidth = 3 + a * 5;
-    ctx.beginPath(); ctx.arc(player.x, player.y, pulseRing.r, 0, Math.PI * 2); ctx.stroke();
+    polyPath(player.x, player.y, pulseRing.r, 6, pulseRing.age * 2); ctx.stroke();
   }
 
   drawBoss();
+  drawBlockBars();
 
   // beams: a thin telegraph while charging, a wide beam while firing
   beams.forEach(bm => {
     const ex = bm.x + Math.cos(bm.angle) * bm.len, ey = bm.y + Math.sin(bm.angle) * bm.len;
-    glowOn('#ff4d6d', bm.firing ? 24 : 8);
-    ctx.strokeStyle = bm.firing ? 'rgba(255,90,120,0.95)' : 'rgba(255,90,120,0.35)';
+    glowOn('#ff9a1f', bm.firing ? 24 : 8);
+    ctx.strokeStyle = bm.firing ? 'rgba(255,154,31,0.95)' : 'rgba(255,154,31,0.35)';
     ctx.lineWidth = bm.firing ? 14 : 2;
     ctx.beginPath(); ctx.moveTo(bm.x, bm.y); ctx.lineTo(ex, ey); ctx.stroke();
     glowOff();
@@ -1086,25 +1190,43 @@ function drawWorld() {
   particles.forEach(p => {
     ctx.globalAlpha = 1 - p.age / p.life;
     ctx.fillStyle = p.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+    ctx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
   });
   ctx.globalAlpha = 1;
 
   orbs.forEach(o => currencyIcon(o.x, o.y, o.cur, 2));
 
+  // enemy rounds: big orange hexagons with a hot core
   flak.forEach(f => {
-    glowOn(f.color, 12);
+    const r = f.r * 1.35 + 2;
+    glowOn(f.color, 14);
     ctx.fillStyle = f.color;
-    ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 1.3 + 1, 0, Math.PI * 2); ctx.fill();
+    polyPath(f.x, f.y, r, 6, f.life * 3);
+    ctx.fill();
+    glowOff();
+    ctx.fillStyle = '#ffe2b8';
+    polyPath(f.x, f.y, r * 0.42, 6, f.life * 3);
+    ctx.fill();
   });
 
-  glowOn('#ffd166', 10);
-  ctx.fillStyle = '#ffd166';
-  shots.forEach(s => { ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill(); });
+  // our rounds (drones included): light neon-blue darts pointed along their flight
+  glowOn('#7fe9ff', 12);
+  ctx.fillStyle = '#7fe9ff';
+  shots.forEach(s => {
+    const a = Math.atan2(s.vy, s.vx), len = s.r * 2.6, wd = s.r * 0.9;
+    const cx = Math.cos(a), sy = Math.sin(a);
+    ctx.beginPath();
+    ctx.moveTo(s.x + cx * len, s.y + sy * len);
+    ctx.lineTo(s.x - sy * wd, s.y + cx * wd);
+    ctx.lineTo(s.x - cx * len, s.y - sy * len);
+    ctx.lineTo(s.x + sy * wd, s.y - cx * wd);
+    ctx.closePath();
+    ctx.fill();
+  });
 
   glowOn('#7cffb2', 10);
   ctx.fillStyle = '#7cffb2';
-  drones.forEach(d => { ctx.beginPath(); ctx.arc(d.x, d.y, 7, 0, Math.PI * 2); ctx.fill(); });
+  drones.forEach(d => { polyPath(d.x, d.y, 8, 4, d.phase * 2); ctx.fill(); });
 
   // ship
   const hitWhite = player.invuln > 0;
@@ -1127,7 +1249,7 @@ function drawWorld() {
   if (player.shield > 0) {
     ctx.strokeStyle = `rgba(159,247,255,${0.25 + 0.4 * (player.shield / Math.max(1, S.maxShield))})`;
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(player.x, player.y, player.radius + 8, 0, Math.PI * 2); ctx.stroke();
+    polyPath(player.x, player.y, player.radius + 9, 6, elapsed * 0.8); ctx.stroke();
   }
 
   ctx.restore();
@@ -1203,7 +1325,7 @@ function drawHUD() {
   ctx.fillStyle = boss.guardian ? '#ff5a66' : '#ffffff';
   ctx.fillText(levelName(boss.level) + (boss.firstClear ? '' : ' - REPLAY'), x0 + pw / 2, 42);
   ctx.font = font(8);
-  ctx.fillStyle = boss.sealed ? '#9d95ff' : '#ffd166';
+  ctx.fillStyle = boss.sealed ? '#7fb2ff' : '#9ff7ff';
   ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}%` : 'CORE EXPOSED!', x0 + pw / 2, 64);
   CUR_ORDER.forEach((k, i) => {
     const cx = x0 + 26 + i * 80;

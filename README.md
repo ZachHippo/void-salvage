@@ -27,8 +27,9 @@ Each level builds a boss out of blocks on a rotating grid. Three kinds:
 - **Armour** (purple) -- bulk. It is what seals the core.
 - **Guns** (orange) -- each one runs a fire pattern. Destroy it and that pattern
   stops for good, so what you shoot first shapes the whole fight.
-- **Core** (cyan) -- sealed and immune until the armour is 80% gone. Blow it to
-  clear the level.
+- **Core** (cyan) -- sealed and immune until the armour is 80% gone. Once it is
+  exposed your rounds fly straight through the remaining blocks and hit it.
+  Blow it to clear the level.
 
 Clearing a level for the first time is the only way to earn white crystals.
 You can go back and replay any level you have unlocked for more red and blue,
