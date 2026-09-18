@@ -4,7 +4,41 @@
 
 // ---------- setup ----------
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const screenCtx = canvas.getContext('2d');
+
+// The world is drawn into a buffer PX times smaller than the screen, then blown
+// up with smoothing off -- every shape lands on a chunky pixel grid, the way a
+// 90s arcade board rendered. HUD text is drawn afterwards at full resolution
+// in a pixel font so it stays crisp and readable.
+const PX = 3;
+const lowCanvas = document.createElement('canvas');
+const lowCtx = lowCanvas.getContext('2d');
+let ctx = screenCtx;             // whichever surface the draw calls target right now
+
+function px(n) { return `${n}px "Press Start 2P", monospace`; }
+
+// Run the draw callback in the pixel buffer, in screen coordinates, then blit.
+function pixelPass(draw) {
+  ctx = lowCtx;
+  lowCtx.setTransform(1 / PX, 0, 0, 1 / PX, 0, 0);
+  lowCtx.clearRect(0, 0, canvas.width, canvas.height);
+  draw();
+  lowCtx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx = screenCtx;
+  screenCtx.imageSmoothingEnabled = false;
+  screenCtx.drawImage(lowCanvas, 0, 0, lowCanvas.width * PX, lowCanvas.height * PX);
+}
+
+// ---------- currencies ----------
+// Blocks pay out in the colour they are: blue armour drops blue orbs, red guns
+// drop red shards, and only a core drops white crystals.
+const CUR = {
+  white: { color: '#f4f2ff', shape: 'diamond' },
+  red:   { color: '#e8434f', shape: 'diamond' },
+  blue:  { color: '#5a4fe0', shape: 'circle' },
+};
+const CUR_ORDER = ['white', 'red', 'blue'];
+function emptyWallet() { return { white: 0, red: 0, blue: 0 }; }
 
 // ---------- helpers ----------
 function rand(a, b) { return a + Math.random() * (b - a); }
@@ -21,17 +55,33 @@ function distToRay(px, py, ox, oy, dx, dy, len) {
 // ---------- save ----------
 // Salvage and upgrades persist across runs: dying costs you the fight, not the
 // progress. Best level reached is the score.
-const SAVE_KEY = 'voidsalvage:save:v2';
-const EMPTY_SAVE = { salvage: 0, upgrades: {}, level: 1, bestLevel: 1, clears: 0 };
+const SAVE_KEY = 'voidsalvage:save:v3';
+const OLD_SAVE_KEY = 'voidsalvage:save:v2';
+function freshSave() { return { wallet: emptyWallet(), upgrades: {}, level: 1, bestLevel: 1, clears: 0 }; }
 
 let save = loadSave();
 
 function loadSave() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    if (raw) return Object.assign({}, EMPTY_SAVE, JSON.parse(raw));
+    if (raw) {
+      const s = Object.assign(freshSave(), JSON.parse(raw));
+      s.wallet = Object.assign(emptyWallet(), s.wallet);
+      return s;
+    }
+    // v2 had a single salvage pool: carry it over as red and blue, keep upgrades.
+    const old = localStorage.getItem(OLD_SAVE_KEY);
+    if (old) {
+      const o = JSON.parse(old);
+      const s = Object.assign(freshSave(), { upgrades: o.upgrades || {}, level: o.level || 1,
+                                             bestLevel: o.bestLevel || 1, clears: o.clears || 0 });
+      const half = Math.floor((o.salvage || 0) / 2);
+      s.wallet.red = half;
+      s.wallet.blue = (o.salvage || 0) - half;
+      return s;
+    }
   } catch (e) { /* blocked storage: run in memory */ }
-  return Object.assign({}, EMPTY_SAVE);
+  return freshSave();
 }
 
 function writeSave() {
@@ -41,39 +91,47 @@ function writeSave() {
 // ---------- upgrades ----------
 // Twelve lines, each stacking several levels -- the shop is the meta game.
 const UPGRADES = [
-  { id: 'damage',    name: 'Rail Slugs',      max: 8, base: 45,  step: 1.36,
+  { id: 'damage',    name: 'Rail Slugs',      max: 8, base: 45,  step: 1.36, price: { red: 1 },
     desc: l => `+${l * 25}% bullet damage` },
-  { id: 'firerate',  name: 'Feed Servos',     max: 8, base: 45,  step: 1.36,
+  { id: 'firerate',  name: 'Feed Servos',     max: 8, base: 45,  step: 1.36, price: { red: 1 },
     desc: l => `+${Math.round(0.16 * l * 100)}% fire rate` },
-  { id: 'multi',     name: 'Split Barrel',    max: 4, base: 130, step: 1.85,
+  { id: 'multi',     name: 'Split Barrel',    max: 4, base: 130, step: 1.85, price: { red: 1, white: 0.03 },
     desc: l => `+${l} projectile${l > 1 ? 's' : ''} per shot` },
-  { id: 'ricochet',  name: 'Ricochet Rounds', max: 3, base: 150, step: 1.9,
+  { id: 'ricochet',  name: 'Ricochet Rounds', max: 3, base: 150, step: 1.9, price: { blue: 1, white: 0.03 },
     desc: l => `rounds bounce ${l}x off the arena` },
-  { id: 'explosive', name: 'Volatile Rounds', max: 4, base: 170, step: 1.85,
+  { id: 'explosive', name: 'Volatile Rounds', max: 4, base: 170, step: 1.85, price: { red: 1, white: 0.03 },
     desc: l => `hits splash ${28 + l * 12}px into the hull` },
-  { id: 'homing',    name: 'Seeker Rounds',   max: 3, base: 165, step: 1.85,
+  { id: 'homing',    name: 'Seeker Rounds',   max: 3, base: 165, step: 1.85, price: { blue: 1, white: 0.03 },
     desc: l => `rounds curve toward armour` },
-  { id: 'drone',     name: 'Turret Drone',    max: 4, base: 210, step: 1.9,
+  { id: 'drone',     name: 'Turret Drone',    max: 4, base: 210, step: 1.9, price: { red: 0.6, blue: 0.6, white: 0.04 },
     desc: l => `${l} drone${l > 1 ? 's' : ''} orbit and fire for you` },
-  { id: 'shield',    name: 'Deflector',       max: 6, base: 95,  step: 1.52,
+  { id: 'shield',    name: 'Deflector',       max: 6, base: 95,  step: 1.52, price: { blue: 1 },
     desc: l => `+${l * 20} shield, recharges out of fire` },
-  { id: 'hull',      name: 'Plating',         max: 6, base: 85,  step: 1.48,
+  { id: 'hull',      name: 'Plating',         max: 6, base: 85,  step: 1.48, price: { blue: 1 },
     desc: l => `+${l * 25} hull` },
-  { id: 'speed',     name: 'Thrusters',       max: 5, base: 75,  step: 1.42,
+  { id: 'speed',     name: 'Thrusters',       max: 5, base: 75,  step: 1.42, price: { blue: 1 },
     desc: l => `+${l * 10}% top speed` },
-  { id: 'magnet',    name: 'Tractor Coil',    max: 5, base: 65,  step: 1.42,
+  { id: 'magnet',    name: 'Tractor Coil',    max: 5, base: 65,  step: 1.42, price: { red: 0.5, blue: 0.5 },
     desc: l => `+${l * 40}% salvage pickup range` },
-  { id: 'pulse',     name: 'Pulse Capacitor', max: 5, base: 115, step: 1.5,
+  { id: 'pulse',     name: 'Pulse Capacitor', max: 5, base: 115, step: 1.5, price: { blue: 1, white: 0.02 },
     desc: l => `pulse charges ${l * 20}% faster` },
 ];
 
 function lvlOf(id) { return save.upgrades[id] || 0; }
-function costOf(up, level) { return Math.round(up.base * Math.pow(up.step, level)); }
+// A price is a weight per currency, scaled by the level curve. Every currency an
+// upgrade needs costs at least 1, so a white-crystal line never becomes free.
+function costOf(up, level) {
+  const scale = up.base * Math.pow(up.step, level);
+  const cost = {};
+  for (const k in up.price) cost[k] = Math.max(1, Math.round(scale * up.price[k]));
+  return cost;
+}
+function canAfford(cost) { return Object.keys(cost).every(k => save.wallet[k] >= cost[k]); }
 
 let S = {};
 function computeStats() {
   S = {
-    damage:    1 + 0.25 * lvlOf('damage'),
+    damage:    Math.round(10 * (1 + 0.25 * lvlOf('damage'))),
     fireDelay: 0.15 / (1 + 0.16 * lvlOf('firerate')),
     shots:     1 + lvlOf('multi'),
     ricochet:  lvlOf('ricochet'),
@@ -94,7 +152,8 @@ computeStats();
 // earlier would throw on the temporal dead zone rather than read as undefined.
 let mode = 'title';           // title | hangar | fight | cleared | dead
 let player, boss, shots, flak, orbs, particles, drones, stars, nebulae, beams;
-let salvageRun, elapsed, shake, hitFlash, paused, fireTimer, pulseRing, titleTime;
+let runWallet = emptyWallet(), popups = [];
+let elapsed, shake, hitFlash, paused, fireTimer, pulseRing, titleTime;
 
 // ---------- viewport ----------
 let fieldW = 0, fieldH = 0;
@@ -118,6 +177,8 @@ function reflowField() {
 function resize() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  lowCanvas.width = Math.ceil(canvas.width / PX);
+  lowCanvas.height = Math.ceil(canvas.height / PX);
   reflowField();
 }
 window.addEventListener('resize', resize);
@@ -137,7 +198,7 @@ window.addEventListener('mouseup', () => { mouse.down = false; });
 function makeField() {
   stars = [];
   for (let i = 0; i < 220; i++) {
-    stars.push({ x: rand(0, canvas.width), y: rand(0, canvas.height), layer: rand(0.2, 1), size: rand(0.5, 2) });
+    stars.push({ x: rand(0, canvas.width), y: rand(0, canvas.height), layer: rand(0.2, 1), size: PX * (Math.random() < 0.8 ? 1 : 2), tint: Math.random() < 0.4 });
   }
   nebulae = [];
   const colors = ['#3a1f6b', '#0f4c5c', '#5c1f4c'];
@@ -192,7 +253,7 @@ function makeBoss(level) {
   const cell = 30;
   const midC = (cols - 1) / 2, midR = (rows - 1) / 2;
   const density = 0.58 + Math.min(0.28, level * 0.015);
-  const armourHp = 3 + Math.floor(level * 0.9) + (guardian ? 2 : 0);
+  const armourHp = 10 * (3 + Math.floor(level * 0.9) + (guardian ? 2 : 0));
 
   const grid = [];
   for (let r = 0; r < rows; r++) { grid[r] = []; for (let c = 0; c < cols; c++) grid[r][c] = null; }
@@ -212,7 +273,7 @@ function makeBoss(level) {
   // boss.blocks sharing the core's coordinates, and killing that phantom (the
   // pulse and splash damage walk boss.blocks, not the grid) clears the core out
   // of the grid: still drawn, but impossible to hit.
-  const coreHp = (28 + level * 9) * (guardian ? 2.2 : 1);
+  const coreHp = 10 * (28 + level * 9) * (guardian ? 2.2 : 1);
   const core = put(midR, midC, 'core', Math.round(coreHp));
 
   // Mirrored silhouette, so every boss reads as a built machine rather than noise.
@@ -236,7 +297,7 @@ function makeBoss(level) {
   for (let i = 0; i < Math.min(gunCount, pool.length); i++) {
     const b = pool[i];
     b.kind = 'gun';
-    b.hp = b.maxHp = Math.max(2, Math.round(armourHp * 0.7));
+    b.hp = b.maxHp = Math.max(20, Math.round(armourHp * 0.7));
     b.gun = makeGun(open[i % open.length].type, level);
   }
 
@@ -280,7 +341,8 @@ function startFight() {
   shots = []; flak = []; orbs = []; particles = []; beams = [];
   drones = [];
   for (let i = 0; i < S.drones; i++) drones.push({ phase: (Math.PI * 2 * i) / S.drones, timer: rand(0, 0.5), x: 0, y: 0 });
-  salvageRun = 0;
+  runWallet = emptyWallet();
+  popups = [];
   elapsed = 0; shake = 0; hitFlash = 0; fireTimer = 0; pulseRing = null;
   paused = false;
   mode = 'fight';
@@ -301,14 +363,24 @@ function breakBlock(b) {
   if (boss.grid[b.r][b.c] === b) boss.grid[b.r][b.c] = null;
   const w = blockWorld(b);
   const isCore = b.kind === 'core';
-  spawnParticles(w.x, w.y, isCore ? '#9ff7ff' : (b.kind === 'gun' ? '#ff9f43' : '#b085ff'), isCore ? 60 : 14, isCore ? 340 : 130);
+  spawnParticles(w.x, w.y, BLOCK_COLOR[b.kind], isCore ? 60 : 14, isCore ? 340 : 130);
   shake = Math.max(shake, isCore ? 30 : 5);
 
-  // Every block pays out.
-  const worth = isCore ? 40 + boss.level * 12 : 2 + Math.floor(boss.level * 0.8);
-  const drops = isCore ? 14 : (b.kind === 'gun' ? 3 : 2);
-  for (let i = 0; i < drops; i++) {
-    orbs.push({ x: w.x + rand(-8, 8), y: w.y + rand(-8, 8), vx: rand(-70, 70), vy: rand(-70, 70), r: 5, value: Math.max(1, Math.round(worth / drops)) });
+  // Every block pays out, in its own colour.
+  const L = boss.level;
+  const drop = (cur, n, value) => {
+    for (let i = 0; i < n; i++) {
+      orbs.push({ x: w.x + rand(-8, 8), y: w.y + rand(-8, 8), vx: rand(-80, 80), vy: rand(-80, 80),
+                  r: 5, cur, value: Math.max(1, Math.round(value)) });
+    }
+  };
+  if (b.kind === 'armour') drop('blue', 2, (2 + L * 0.8) / 2);
+  if (b.kind === 'gun')    drop('red', 3, (6 + L * 2.4) / 3);
+  if (isCore) {
+    const g = boss.guardian ? 2 : 1;
+    drop('white', 3 + Math.floor(L / 2) * g, 1);
+    drop('red', 6, (20 + L * 6) * g / 6);
+    drop('blue', 6, (20 + L * 6) * g / 6);
   }
 
   if (isCore) {
@@ -324,6 +396,11 @@ function damageBlock(b, dmg) {
   if (b.kind === 'core' && boss.sealed) { b.flash = 0.08; return; }
   b.hp -= dmg;
   b.flash = 0.1;
+  // Arcade-style damage numbers, capped so a drone swarm cannot flood the screen.
+  if (popups.length < 70) {
+    const w = blockWorld(b);
+    popups.push({ x: w.x + rand(-6, 6), y: w.y + rand(-6, 6), text: String(Math.round(dmg)), age: 0, life: 0.55 });
+  }
   if (b.hp <= 0) breakBlock(b);
 }
 
@@ -335,13 +412,15 @@ function splashDamage(x, y, radius, dmg) {
   });
 }
 
+function bankRun() { CUR_ORDER.forEach(k => { save.wallet[k] += runWallet[k]; }); }
+
 function clearFight() {
   // Killing the core ends the fight instantly, so anything still drifting --
   // including the core's own payout -- would be unreachable. The wreck is
   // salvaged for you. (Dying does not: uncollected orbs are the risk.)
-  orbs.forEach(o => { salvageRun += o.value; });
+  orbs.forEach(o => { runWallet[o.cur] += o.value; });
   orbs = [];
-  save.salvage += salvageRun;
+  bankRun();
   save.clears++;
   save.level++;
   if (save.level > save.bestLevel) save.bestLevel = save.level;
@@ -351,7 +430,7 @@ function clearFight() {
 
 function failFight() {
   // You keep what you actually picked up -- cash out is the point of the loop.
-  save.salvage += salvageRun;
+  bankRun();
   writeSave();
   mode = 'dead';
   spawnParticles(player.x, player.y, '#7fd8ff', 50, 330);
@@ -602,7 +681,7 @@ function update(dt) {
   });
   orbs = orbs.filter(o => {
     if (dist(o.x, o.y, player.x, player.y) < 20) {
-      salvageRun += o.value;
+      runWallet[o.cur] += o.value;
       player.pulse = Math.min(player.maxPulse, player.pulse + 6 * S.pulseRate);
       return false;
     }
@@ -615,6 +694,8 @@ function update(dt) {
     p.vx -= p.vx * 3 * dt; p.vy -= p.vy * 3 * dt;
   });
   particles = particles.filter(p => p.age < p.life);
+  popups.forEach(p => { p.age += dt; });
+  popups = popups.filter(p => p.age < p.life);
   driftField(dt, player.vx, player.vy);
   if (pulseRing) {
     pulseRing.age += dt;
@@ -630,7 +711,7 @@ function updateIdle(dt) { titleTime += dt; driftField(dt, 40, 14); }
 // ---------- draw ----------
 function drawBackdrop() {
   const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  g.addColorStop(0, '#07070f'); g.addColorStop(1, '#0c0c1a');
+  g.addColorStop(0, '#140a18'); g.addColorStop(1, '#1f0e22');
   ctx.fillStyle = g;
   ctx.fillRect(-40, -40, canvas.width + 80, canvas.height + 80);
   nebulae.forEach(n => {
@@ -640,12 +721,13 @@ function drawBackdrop() {
     ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
   });
   stars.forEach(s => {
-    ctx.fillStyle = `rgba(255,255,255,${0.4 + s.layer * 0.6})`;
-    ctx.fillRect(s.x, s.y, s.size, s.size);
+    const a = 0.35 + s.layer * 0.6;
+    ctx.fillStyle = s.tint ? `rgba(206,84,226,${a})` : `rgba(255,255,255,${a})`;
+    ctx.fillRect(Math.floor(s.x / PX) * PX, Math.floor(s.y / PX) * PX, s.size, s.size);
   });
 }
 
-const BLOCK_COLOR = { armour: '#b085ff', gun: '#ff9f43', core: '#9ff7ff' };
+const BLOCK_COLOR = { armour: '#5a4fe0', gun: '#e0444f', core: '#f4f2ff' };
 
 function roundRect(x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -744,11 +826,8 @@ function drawCoreFace(s, h, hurt, sealed) {
   }
   ctx.restore();
 
-  ctx.shadowColor = '#9ff7ff';
-  ctx.shadowBlur = sealed ? 6 : 16 + pulse * 16;
   ctx.fillStyle = sealed ? '#3d6f7d' : `rgb(${170 + Math.round(pulse * 70)},255,255)`;
   ctx.beginPath(); ctx.arc(0, 0, h * 0.36 * (1 - hurt * 0.3), 0, Math.PI * 2); ctx.fill();
-  ctx.shadowBlur = 0;
 }
 
 function drawBoss() {
@@ -774,10 +853,7 @@ function drawBoss() {
     } else if (b.kind === 'core') {
       drawCoreFace(s, h, hurt, sealed);
     } else {
-      ctx.shadowColor = base;
-      ctx.shadowBlur = 6;
       drawPlate(s, h, base, hurt);
-      ctx.shadowBlur = 0;
       if (b.kind === 'gun') drawGunFace(b, h, base);
       if (hurt > 0.12) drawCracks(b, h, hurt);
     }
@@ -801,21 +877,69 @@ function drawBoss() {
   ctx.restore();
 }
 
-function drawFight() {
+// ---------- pixel icons ----------
+// Currency icons are tiny bitmaps drawn cell by cell, so they stay crisp at any
+// size. '#' is the body colour, '+' the highlight.
+const ICONS = {
+  diamond: ['...#...', '..#+#..', '.#+###.', '#+#####', '.#####.', '..###..', '...#...'],
+  circle:  ['..###..', '.#+###.', '#+#####', '#######', '#######', '.#####.', '..###..'],
+};
+CUR.white.text = '#f4f2ff';
+CUR.red.text = '#ff5a66';
+CUR.blue.text = '#7d72ff';
+
+function pixelIcon(x, y, cur, cell) {
+  const rows = ICONS[CUR[cur].shape];
+  const n = rows.length;
+  const x0 = Math.round((x - (n * cell) / 2) / cell) * cell;
+  const y0 = Math.round((y - (n * cell) / 2) / cell) * cell;
+  const body = CUR[cur].color, hi = shade(body, 0.3);
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const ch = rows[r][c];
+      if (ch === '.') continue;
+      ctx.fillStyle = ch === '+' ? hi : body;
+      ctx.fillRect(x0 + c * cell, y0 + r * cell, cell, cell);
+    }
+  }
+}
+
+// Chamfered arcade panel, the same frame the HUD, hangar and cards all share.
+function panel(x, y, w, h, border, fill) {
+  const c = 8;
+  ctx.beginPath();
+  ctx.moveTo(x + c, y); ctx.lineTo(x + w - c, y); ctx.lineTo(x + w, y + c);
+  ctx.lineTo(x + w, y + h - c); ctx.lineTo(x + w - c, y + h); ctx.lineTo(x + c, y + h);
+  ctx.lineTo(x, y + h - c); ctx.lineTo(x, y + c); ctx.closePath();
+  ctx.fillStyle = fill || 'rgba(26,32,38,0.92)';
+  ctx.fill();
+  ctx.strokeStyle = border || '#8fd0c6';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+}
+
+function scanlines() {
+  ctx.fillStyle = 'rgba(0,0,0,0.13)';
+  for (let y = 0; y < canvas.height; y += PX * 2) ctx.fillRect(0, y, canvas.width, PX);
+}
+
+// ---------- fight ----------
+function drawWorld() {
   ctx.save();
   if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
   drawBackdrop();
 
   player.trail.forEach(p => {
     const a = 1 - p.age / p.life;
-    ctx.fillStyle = `rgba(120,200,255,${a * 0.5})`;
-    ctx.beginPath(); ctx.arc(p.x, p.y, 4 * a, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = `rgba(255,170,90,${a * 0.6})`;
+    const s = 6 * a;
+    ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
   });
 
   if (pulseRing) {
     const a = 1 - pulseRing.age / pulseRing.life;
-    ctx.strokeStyle = `rgba(159,247,255,${a * 0.9})`;
-    ctx.lineWidth = 3 + a * 5;
+    ctx.strokeStyle = `rgba(244,242,255,${a * 0.9})`;
+    ctx.lineWidth = 3 + a * 6;
     ctx.beginPath(); ctx.arc(player.x, player.y, pulseRing.r, 0, Math.PI * 2); ctx.stroke();
   }
 
@@ -824,112 +948,188 @@ function drawFight() {
   // beams: a thin telegraph while charging, a wide beam while firing
   beams.forEach(bm => {
     const ex = bm.x + Math.cos(bm.angle) * bm.len, ey = bm.y + Math.sin(bm.angle) * bm.len;
-    ctx.save();
-    ctx.shadowColor = '#ff4d6d'; ctx.shadowBlur = bm.firing ? 24 : 8;
-    ctx.strokeStyle = bm.firing ? 'rgba(255,90,120,0.95)' : 'rgba(255,90,120,0.35)';
-    ctx.lineWidth = bm.firing ? 14 : 2;
+    ctx.strokeStyle = bm.firing ? '#ff5a66' : 'rgba(255,90,102,0.45)';
+    ctx.lineWidth = bm.firing ? 15 : 3;
     ctx.beginPath(); ctx.moveTo(bm.x, bm.y); ctx.lineTo(ex, ey); ctx.stroke();
-    ctx.restore();
+    if (bm.firing) {
+      ctx.strokeStyle = '#ffe3e6';
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(bm.x, bm.y); ctx.lineTo(ex, ey); ctx.stroke();
+    }
   });
 
   particles.forEach(p => {
-    const a = 1 - p.age / p.life;
-    ctx.globalAlpha = a; ctx.fillStyle = p.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1 - p.age / p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
   });
   ctx.globalAlpha = 1;
 
-  orbs.forEach(o => {
-    ctx.save(); ctx.shadowColor = '#9ff7ff'; ctx.shadowBlur = 12; ctx.fillStyle = '#9ff7ff';
-    ctx.beginPath(); ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-  });
+  orbs.forEach(o => pixelIcon(o.x, o.y, o.cur, PX));
 
   flak.forEach(f => {
-    ctx.save(); ctx.shadowColor = f.color; ctx.shadowBlur = 12; ctx.fillStyle = f.color;
-    ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    ctx.fillStyle = f.color;
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r + 1, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff4f6';
+    ctx.fillRect(f.x - 1.5, f.y - 1.5, 3, 3);
   });
 
-  shots.forEach(s => {
-    ctx.save(); ctx.shadowColor = '#ffd166'; ctx.shadowBlur = 10; ctx.fillStyle = '#ffd166';
-    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill(); ctx.restore();
-  });
+  ctx.fillStyle = '#ffd166';
+  shots.forEach(s => ctx.fillRect(s.x - 3, s.y - 3, 6, 6));
 
   drones.forEach(d => {
-    ctx.save(); ctx.shadowColor = '#7cffb2'; ctx.shadowBlur = 10; ctx.fillStyle = '#7cffb2';
-    ctx.beginPath(); ctx.arc(d.x, d.y, 5, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+    ctx.fillStyle = '#4dd06a';
+    ctx.fillRect(d.x - 6, d.y - 6, 12, 12);
+    ctx.fillStyle = '#b6ffc6';
+    ctx.fillRect(d.x - 3, d.y - 3, 6, 6);
   });
 
+  // ship: hull, cockpit, and an engine flare that flickers while thrusting
   ctx.save();
-  ctx.translate(player.x, player.y); ctx.rotate(player.angle);
-  ctx.shadowColor = player.invuln > 0 ? '#ffffff' : '#7fd8ff'; ctx.shadowBlur = 18;
-  ctx.fillStyle = player.invuln > 0 ? '#ffffff' : '#7fd8ff';
+  ctx.translate(player.x, player.y);
+  ctx.rotate(player.angle);
+  const r = player.radius;
+  if (player.trail.length && Math.random() < 0.8) {
+    ctx.fillStyle = '#ffb347';
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.45, -r * 0.3); ctx.lineTo(-r * rand(1.1, 1.5), 0); ctx.lineTo(-r * 0.45, r * 0.3);
+    ctx.fill();
+  }
+  ctx.fillStyle = player.invuln > 0 && Math.floor(elapsed * 20) % 2 ? '#ffffff' : '#7fd8ff';
   ctx.beginPath();
-  ctx.moveTo(player.radius, 0);
-  ctx.lineTo(-player.radius * 0.8, player.radius * 0.7);
-  ctx.lineTo(-player.radius * 0.4, 0);
-  ctx.lineTo(-player.radius * 0.8, -player.radius * 0.7);
-  ctx.closePath(); ctx.fill();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(-r * 0.8, r * 0.75);
+  ctx.lineTo(-r * 0.4, 0);
+  ctx.lineTo(-r * 0.8, -r * 0.75);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#2a4a7a';
+  ctx.beginPath();
+  ctx.moveTo(r * 0.55, 0); ctx.lineTo(-r * 0.1, r * 0.28); ctx.lineTo(-r * 0.1, -r * 0.28);
+  ctx.fill();
   ctx.restore();
 
   if (player.shield > 0) {
-    ctx.strokeStyle = `rgba(159,247,255,${0.25 + 0.4 * (player.shield / Math.max(1, S.maxShield))})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(player.x, player.y, player.radius + 7, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = `rgba(90,184,232,${0.3 + 0.5 * (player.shield / Math.max(1, S.maxShield))})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.radius + 8, 0, Math.PI * 2); ctx.stroke();
   }
 
   ctx.restore();
+}
 
+function drawPopups() {
+  ctx.textAlign = 'center';
+  ctx.font = px(10);
+  popups.forEach(p => {
+    const a = 1 - p.age / p.life;
+    const y = p.y - p.age * 45;
+    ctx.globalAlpha = Math.min(1, a * 1.8);
+    ctx.fillStyle = '#1a0d1e';
+    ctx.fillText(p.text, p.x + 2, y + 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(p.text, p.x, y);
+  });
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
+function drawFight() {
+  pixelPass(drawWorld);
+  drawPopups();
   if (hitFlash > 0) {
     ctx.fillStyle = `rgba(255,60,60,${hitFlash * 0.3})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
+  scanlines();
   drawHUD();
   if (paused) drawPaused();
 }
 
 function bar(x, y, w, h, pct, color) {
-  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillStyle = '#0b0d12';
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = color;
-  ctx.fillRect(x, y, w * clamp(pct, 0, 1), h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-  ctx.strokeRect(x, y, w, h);
+  ctx.fillRect(x + 3, y + 3, Math.round((w - 6) * clamp(pct, 0, 1)), h - 6);
 }
 
 function drawHUD() {
-  ctx.font = '14px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = '#ffffff';
-  ctx.fillText('HULL', 20, 28);
-  bar(74, 16, 170, 15, player.hull / S.maxHull, '#4dff88');
-  if (S.maxShield > 0) {
-    ctx.fillText('SHLD', 20, 50);
-    bar(74, 38, 170, 15, player.shield / S.maxShield, '#7fd8ff');
-  }
-  const py = S.maxShield > 0 ? 72 : 50;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText('PULSE', 20, py);
-  bar(74, py - 12, 170, 15, player.pulse / player.maxPulse, '#9ff7ff');
-  if (player.pulse >= player.maxPulse) { ctx.fillStyle = '#9ff7ff'; ctx.fillText('[E]', 252, py); }
+  // ship panel, top left
+  const rows = S.maxShield > 0 ? 3 : 2;
+  panel(14, 14, 318, 22 + rows * 28);
+  let y = 30;
+  const row = (label, pct, color, text) => {
+    ctx.textAlign = 'left';
+    ctx.font = px(9);
+    ctx.fillStyle = '#cfe9e4';
+    ctx.fillText(label, 28, y + 13);
+    bar(100, y, 218, 20, pct, color);
+    if (text) {
+      ctx.textAlign = 'center';
+      ctx.font = px(8);
+      ctx.fillStyle = '#1a0d1e';
+      ctx.fillText(text, 210, y + 15);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(text, 209, y + 14);
+    }
+    y += 28;
+  };
+  row('HULL', player.hull / S.maxHull, '#4dd06a', `${Math.ceil(player.hull)} / ${S.maxHull}`);
+  if (S.maxShield > 0) row('SHLD', player.shield / S.maxShield, '#3f9fd8', `${Math.ceil(player.shield)} / ${S.maxShield}`);
+  row('PULSE', player.pulse / player.maxPulse, '#9a55d8', player.pulse >= player.maxPulse ? 'PRESS E' : null);
 
-  ctx.textAlign = 'right';
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(`LEVEL ${boss.level}${boss.guardian ? '  — GUARDIAN' : ''}`, canvas.width - 20, 28);
-  ctx.fillStyle = '#9ff7ff';
-  ctx.fillText(`SALVAGE +${salvageRun}`, canvas.width - 20, 48);
-  ctx.fillStyle = boss.sealed ? '#b085ff' : '#ff9f43';
-  ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}%` : 'CORE EXPOSED', canvas.width - 20, 68);
+  // fight panel, top right: which fight, how sealed, and this run's haul
+  const pw = 262, x0 = canvas.width - pw - 14;
+  panel(x0, 14, pw, 116);
+  ctx.textAlign = 'center';
+  ctx.font = px(12);
+  ctx.fillStyle = boss.guardian ? '#ff5a66' : '#ffffff';
+  ctx.fillText(boss.guardian ? `GUARD ${boss.level / 5}` : `LEVEL ${boss.level}`, x0 + pw / 2, 42);
+  ctx.font = px(8);
+  ctx.fillStyle = boss.sealed ? '#9d95ff' : '#ffd166';
+  ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}%` : 'CORE EXPOSED!', x0 + pw / 2, 64);
+  CUR_ORDER.forEach((k, i) => {
+    const cx = x0 + 26 + i * 80;
+    pixelIcon(cx, 96, k, 3);
+    ctx.textAlign = 'left';
+    ctx.font = px(9);
+    ctx.fillStyle = CUR[k].text;
+    ctx.fillText(`+${runWallet[k]}`, cx + 15, 101);
+  });
 
   ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.font = '13px monospace';
-  ctx.fillText('WASD move   mouse aim + click to fire   E pulse   P pause', 20, canvas.height - 18);
+  ctx.font = px(7);
+  ctx.fillStyle = 'rgba(207,233,228,0.55)';
+  ctx.fillText('WASD MOVE   MOUSE AIM   CLICK FIRE   E PULSE   P PAUSE', 18, canvas.height - 16);
 }
 
 function drawPaused() {
-  ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = 'bold 40px monospace';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  panel(canvas.width / 2 - 170, canvas.height / 2 - 60, 340, 110);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = px(22);
   ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2 - 6);
-  ctx.font = '17px monospace'; ctx.fillStyle = 'rgba(255,255,255,0.7)';
-  ctx.fillText('P or Esc to resume', canvas.width / 2, canvas.height / 2 + 28);
+  ctx.font = px(8);
+  ctx.fillStyle = '#9fd3cc';
+  ctx.fillText('P OR ESC TO RESUME', canvas.width / 2, canvas.height / 2 + 28);
   ctx.textAlign = 'left';
+}
+
+// A centred row of currency icons with amounts.
+function walletRow(cy, wallet, prefix, cell) {
+  cell = cell || 4;
+  const colW = 150;
+  const left = canvas.width / 2 - (colW * CUR_ORDER.length) / 2;
+  CUR_ORDER.forEach((k, i) => {
+    const x = left + i * colW + 24;
+    pixelIcon(x, cy, k, cell);
+    ctx.textAlign = 'left';
+    ctx.font = px(12);
+    ctx.fillStyle = CUR[k].text;
+    ctx.fillText(`${prefix || ''}${wallet[k]}`, x + cell * 4 + 8, cy + 7);
+  });
 }
 
 // ---------- hangar ----------
@@ -937,77 +1137,97 @@ function drawPaused() {
 // what you see is exactly what you can click.
 function hangarLayout() {
   const cols = canvas.width < 900 ? 2 : (canvas.width < 1250 ? 3 : 4);
-  const cw = 250, ch = 92, gap = 14;
+  const cw = 268, ch = 104, gap = 14;
   const totalW = cols * cw + (cols - 1) * gap;
   const x0 = (canvas.width - totalW) / 2;
-  const y0 = 168;
+  const y0 = 190;
   const cards = UPGRADES.map((up, i) => {
     const level = lvlOf(up.id);
     const maxed = level >= up.max;
-    const cost = maxed ? 0 : costOf(up, level);
+    const cost = maxed ? {} : costOf(up, level);
     return {
       up, level, maxed, cost,
-      afford: !maxed && save.salvage >= cost,
+      afford: !maxed && canAfford(cost),
       x: x0 + (i % cols) * (cw + gap),
       y: y0 + Math.floor(i / cols) * (ch + gap),
       w: cw, h: ch,
     };
   });
   const rows = Math.ceil(UPGRADES.length / cols);
-  const launch = { x: canvas.width / 2 - 130, y: y0 + rows * (ch + gap) + 16, w: 260, h: 52 };
+  const launch = { x: canvas.width / 2 - 150, y: y0 + rows * (ch + gap) + 12, w: 300, h: 58 };
   return { cards, launch };
 }
 
 function drawHangar() {
-  drawBackdrop();
-  ctx.fillStyle = 'rgba(5,5,12,0.72)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  pixelPass(drawBackdrop);
+  ctx.fillStyle = 'rgba(12,6,16,0.55)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  scanlines();
 
+  const cx = canvas.width / 2;
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#eaf6ff'; ctx.font = 'bold 40px monospace';
-  ctx.fillText('HANGAR', canvas.width / 2, 62);
-  ctx.font = '16px monospace'; ctx.fillStyle = '#9ff7ff';
-  ctx.fillText(`SALVAGE ${save.salvage}`, canvas.width / 2, 92);
-  ctx.fillStyle = 'rgba(228,238,255,0.65)';
-  ctx.fillText(`next fight: level ${save.level}${save.level % 5 === 0 ? '  (GUARDIAN)' : ''}   ·   best ${save.bestLevel}`, canvas.width / 2, 116);
+  ctx.font = px(26);
+  ctx.fillStyle = '#e0444f';
+  ctx.fillText('HANGAR', cx + 3, 62);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('HANGAR', cx, 59);
+  ctx.font = px(8);
+  ctx.fillStyle = '#9fd3cc';
+  const next = save.level % 5 === 0 ? `GUARD ${save.level / 5}  (LV ${save.level})` : `LEVEL ${save.level}`;
+  ctx.fillText(`NEXT: ${next}      BEST: ${save.bestLevel}`, cx, 88);
+
+  panel(cx - 240, 104, 480, 62);
+  walletRow(135, save.wallet, '', 4);
 
   const { cards, launch } = hangarLayout();
   cards.forEach(c => {
-    ctx.fillStyle = c.maxed ? 'rgba(159,247,255,0.10)' : (c.afford ? 'rgba(159,247,255,0.16)' : 'rgba(255,255,255,0.05)');
-    ctx.fillRect(c.x, c.y, c.w, c.h);
-    ctx.strokeStyle = c.maxed ? 'rgba(159,247,255,0.5)' : (c.afford ? '#9ff7ff' : 'rgba(255,255,255,0.15)');
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(c.x, c.y, c.w, c.h);
+    const border = c.maxed ? '#8fd0c6' : (c.afford ? '#ffd84a' : '#4a5462');
+    panel(c.x, c.y, c.w, c.h, border, c.afford ? 'rgba(44,40,26,0.94)' : 'rgba(26,32,38,0.92)');
 
     ctx.textAlign = 'left';
-    ctx.fillStyle = c.afford || c.maxed ? '#eaf6ff' : 'rgba(234,246,255,0.5)';
-    ctx.font = 'bold 15px monospace';
-    ctx.fillText(c.up.name, c.x + 12, c.y + 24);
+    ctx.font = px(9);
+    ctx.fillStyle = c.afford || c.maxed ? '#ffffff' : '#8a93a0';
+    ctx.fillText(c.up.name.toUpperCase(), c.x + 14, c.y + 26);
 
-    ctx.font = '12px monospace';
-    ctx.fillStyle = 'rgba(228,238,255,0.6)';
-    ctx.fillText(c.up.desc(Math.max(1, c.level + (c.maxed ? 0 : 1))), c.x + 12, c.y + 45);
+    ctx.font = px(7);
+    ctx.fillStyle = '#9fb0b0';
+    ctx.fillText(c.up.desc(Math.max(1, c.level + (c.maxed ? 0 : 1))).toUpperCase(), c.x + 14, c.y + 46);
 
-    // level pips
     for (let i = 0; i < c.up.max; i++) {
-      ctx.fillStyle = i < c.level ? '#9ff7ff' : 'rgba(255,255,255,0.16)';
-      ctx.fillRect(c.x + 12 + i * 12, c.y + 58, 8, 5);
+      ctx.fillStyle = i < c.level ? '#ffd84a' : '#3a424e';
+      ctx.fillRect(c.x + 14 + i * 14, c.y + 58, 10, 6);
     }
 
-    ctx.textAlign = 'right';
-    ctx.font = 'bold 13px monospace';
-    ctx.fillStyle = c.maxed ? 'rgba(159,247,255,0.7)' : (c.afford ? '#9ff7ff' : 'rgba(255,255,255,0.35)');
-    ctx.fillText(c.maxed ? 'MAX' : `${c.cost}`, c.x + c.w - 12, c.y + c.h - 12);
+    if (c.maxed) {
+      ctx.textAlign = 'right';
+      ctx.font = px(9);
+      ctx.fillStyle = '#8fd0c6';
+      ctx.fillText('MAX', c.x + c.w - 14, c.y + c.h - 14);
+      return;
+    }
+    // costs, laid out right to left: icon + amount per currency
+    let rx = c.x + c.w - 14;
+    Object.keys(c.cost).sort((a, b) => CUR_ORDER.indexOf(b) - CUR_ORDER.indexOf(a)).forEach(k => {
+      const txt = String(c.cost[k]);
+      ctx.font = px(8);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = save.wallet[k] >= c.cost[k] ? CUR[k].text : '#5d6470';
+      ctx.fillText(txt, rx, c.y + c.h - 14);
+      rx -= ctx.measureText(txt).width + 13;
+      pixelIcon(rx + 4, c.y + c.h - 18, k, 2);
+      rx -= 12;
+    });
   });
 
-  ctx.fillStyle = 'rgba(159,247,255,0.18)';
-  ctx.fillRect(launch.x, launch.y, launch.w, launch.h);
-  ctx.strokeStyle = '#9ff7ff'; ctx.lineWidth = 2;
-  ctx.strokeRect(launch.x, launch.y, launch.w, launch.h);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#eaf6ff'; ctx.font = 'bold 20px monospace';
-  ctx.fillText(`LAUNCH  —  LEVEL ${save.level}`, launch.x + launch.w / 2, launch.y + 34);
+  panel(launch.x, launch.y, launch.w, launch.h, '#7cf29a', '#2e8a45');
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffffff';
+  ctx.font = px(16);
+  ctx.fillText('FIGHT', launch.x + launch.w / 2, launch.y + 37);
 
-  ctx.font = '12px monospace'; ctx.fillStyle = 'rgba(228,238,255,0.4)';
-  ctx.fillText('click an upgrade to buy   ·   Enter or click LAUNCH to fight   ·   R resets the save', canvas.width / 2, launch.y + launch.h + 26);
+  ctx.font = px(7);
+  ctx.fillStyle = 'rgba(207,233,228,0.5)';
+  ctx.fillText('CLICK AN UPGRADE TO BUY   -   ENTER OR FIGHT TO LAUNCH   -   R RESETS SAVE', cx, launch.y + launch.h + 24);
   ctx.textAlign = 'left';
 }
 
@@ -1020,7 +1240,7 @@ function hangarClick(mx, my) {
   for (const c of cards) {
     if (mx < c.x || mx > c.x + c.w || my < c.y || my > c.y + c.h) continue;
     if (c.maxed || !c.afford) return;
-    save.salvage -= c.cost;
+    for (const k in c.cost) save.wallet[k] -= c.cost[k];
     save.upgrades[c.up.id] = c.level + 1;
     computeStats();
     writeSave();
@@ -1033,49 +1253,63 @@ function centreText(lines, topY) {
   ctx.textAlign = 'center';
   let y = topY;
   lines.forEach(l => {
-    ctx.fillStyle = l.color || '#eaf6ff';
-    ctx.font = l.font || '16px monospace';
+    ctx.font = l.font || px(10);
+    if (l.drop) {
+      ctx.fillStyle = l.drop;
+      ctx.fillText(l.text, canvas.width / 2 + 4, y + 4);
+    }
+    ctx.fillStyle = l.color || '#f4f2ff';
     ctx.fillText(l.text, canvas.width / 2, y);
     y += l.gap || 26;
   });
   ctx.textAlign = 'left';
+  return y;
 }
 
 function drawTitle() {
-  drawBackdrop();
-  ctx.fillStyle = 'rgba(5,5,12,0.55)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  pixelPass(drawBackdrop);
+  ctx.fillStyle = 'rgba(12,6,16,0.45)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  scanlines();
   const cy = canvas.height / 2;
-  ctx.save();
-  ctx.shadowColor = '#7fd8ff'; ctx.shadowBlur = 26;
-  centreText([{ text: 'VOID SALVAGE', font: 'bold 62px monospace', gap: 44 }], cy - 90);
-  ctx.restore();
-  centreText([
-    { text: 'One ship against bosses built from blocks.', color: 'rgba(228,238,255,0.8)' },
-    { text: 'Shred the armour, expose the core, blow it.', color: 'rgba(228,238,255,0.8)' },
-    { text: 'Every block you break pays out. Spend it in the hangar.', color: 'rgba(228,238,255,0.55)', gap: 40 },
-    { text: save.bestLevel > 1 ? `best level reached: ${save.bestLevel}   ·   salvage banked: ${save.salvage}` : 'WASD move  ·  mouse aim  ·  click to fire  ·  E pulse', color: 'rgba(159,247,255,0.75)', gap: 46 },
-    { text: 'click or press any key to enter the hangar', color: `rgba(159,247,255,${0.55 + Math.sin(titleTime * 3) * 0.35})`, font: 'bold 18px monospace' },
-  ], cy - 34);
+  let y = centreText([
+    { text: 'VOID SALVAGE', font: px(40), drop: '#e0444f', gap: 60 },
+    { text: 'ONE SHIP AGAINST BOSSES BUILT FROM BLOCKS', color: '#cfe9e4', gap: 24 },
+    { text: 'SHRED THE ARMOUR. EXPOSE THE CORE. BLOW IT.', color: '#cfe9e4', gap: 44 },
+  ], cy - 110);
+  if (save.bestLevel > 1 || CUR_ORDER.some(k => save.wallet[k] > 0)) {
+    walletRow(y, save.wallet, '', 4);
+    y += 44;
+    y = centreText([{ text: `BEST LEVEL ${save.bestLevel}`, color: '#9fd3cc', font: px(8), gap: 40 }], y);
+  } else {
+    y = centreText([{ text: 'WASD MOVE - MOUSE AIM - CLICK FIRE - E PULSE', color: '#9fd3cc', font: px(8), gap: 40 }], y);
+  }
+  // hard on/off blink, like an attract-mode INSERT COIN
+  if (Math.floor(titleTime * 2) % 2 === 0) {
+    centreText([{ text: 'PRESS ANY KEY', color: '#ffd84a', font: px(14) }], y + 10);
+  }
+}
+
+function drawEndScreen(title, titleColor, subtitle, prompt) {
+  pixelPass(drawFightBackdropStill);
+  scanlines();
+  const cy = canvas.height / 2;
+  panel(canvas.width / 2 - 300, cy - 130, 600, 250);
+  let y = centreText([
+    { text: title, font: px(26), color: titleColor, drop: '#1a0d1e', gap: 44 },
+    { text: subtitle, color: '#cfe9e4', font: px(9), gap: 42 },
+  ], cy - 70);
+  walletRow(y, runWallet, '+', 4);
+  centreText([{ text: prompt, color: '#ffd84a', font: px(9) }], y + 60);
 }
 
 function drawCleared() {
-  drawFightBackdropStill();
-  centreText([
-    { text: 'CORE DESTROYED', font: 'bold 44px monospace', color: '#9ff7ff', gap: 44 },
-    { text: `level ${save.level - 1} cleared   ·   +${salvageRun} salvage`, gap: 30 },
-    { text: `banked: ${save.salvage}`, color: 'rgba(228,238,255,0.65)', gap: 44 },
-    { text: 'click or press any key for the hangar', color: '#9ff7ff', font: 'bold 18px monospace' },
-  ], canvas.height / 2 - 70);
+  const lv = save.level - 1;
+  drawEndScreen('CORE DESTROYED', '#ffd84a', lv % 5 === 0 ? `GUARD ${lv / 5} DOWN` : `LEVEL ${lv} CLEARED`, 'CLICK FOR THE HANGAR');
 }
 
 function drawDead() {
-  drawFightBackdropStill();
-  centreText([
-    { text: 'SHIP LOST', font: 'bold 44px monospace', gap: 44 },
-    { text: `level ${save.level}   ·   kept +${salvageRun} salvage`, gap: 30 },
-    { text: `banked: ${save.salvage}`, color: 'rgba(228,238,255,0.65)', gap: 44 },
-    { text: 'click or press any key to refit and retry', color: '#9ff7ff', font: 'bold 18px monospace' },
-  ], canvas.height / 2 - 70);
+  drawEndScreen('SHIP LOST', '#ff5a66', `LEVEL ${save.level} - YOU KEEP WHAT YOU GRABBED`, 'CLICK TO REFIT AND RETRY');
 }
 
 // End screens keep the arena behind them, held perfectly still.
@@ -1083,12 +1317,12 @@ function drawFightBackdropStill() {
   drawBackdrop();
   if (boss) drawBoss();
   particles.forEach(p => {
-    const a = 1 - p.age / p.life;
-    ctx.globalAlpha = a; ctx.fillStyle = p.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1 - p.age / p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
   });
   ctx.globalAlpha = 1;
-  ctx.fillStyle = 'rgba(4,4,10,0.66)';
+  ctx.fillStyle = 'rgba(8,4,12,0.6)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
@@ -1121,7 +1355,7 @@ window.addEventListener('keydown', e => {
   if (mode === 'cleared' || mode === 'dead') { mode = 'hangar'; return; }
   if (mode === 'hangar') {
     if (k === 'enter') startFight();
-    if (k === 'r') { save = Object.assign({}, EMPTY_SAVE, { upgrades: {} }); computeStats(); writeSave(); }
+    if (k === 'r') { save = freshSave(); computeStats(); writeSave(); }
     return;
   }
   if (mode === 'fight' && (k === 'p' || k === 'escape')) paused = !paused;
@@ -1134,6 +1368,7 @@ window.addEventListener('click', e => {
 });
 
 titleTime = 0;
+elapsed = 0;
 particles = [];
 makePlayer();
 requestAnimationFrame(loop);
