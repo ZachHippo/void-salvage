@@ -631,6 +631,30 @@ function runGun(b, dt) {
 }
 
 // ---------- player fire ----------
+// What a shot struck this frame, testing the whole path it travelled rather
+// than only where it landed: a fast round at a low frame rate moves further
+// than a block is wide, and would otherwise skip clean over it.
+function shotHit(s) {
+  const px = s.px === undefined ? s.x : s.px, py = s.py === undefined ? s.y : s.py;
+  const dx = s.x - px, dy = s.y - py, len = Math.hypot(dx, dy);
+  // Once the core is exposed, rounds pass straight through the remaining
+  // blocks and only the core stops them. It gets a generous round hitbox about
+  // the size of its inner halo, because it is a single small cell on a moving
+  // boss and a round aimed at it would often arrive just after it moved.
+  if (!boss.sealed) {
+    if (!boss.core.alive || boss.core === s.last) return null;
+    const c = blockWorld(boss.core);
+    const d = len > 0 ? distToRay(c.x, c.y, px, py, dx / len, dy / len, len) : dist(c.x, c.y, s.x, s.y);
+    return d < boss.cell * 0.95 + s.r ? boss.core : null;
+  }
+  const steps = Math.max(1, Math.ceil(len / (boss.cell * 0.3)));
+  for (let i = 1; i <= steps; i++) {
+    const b = blockAtWorld(px + (dx * i) / steps, py + (dy * i) / steps);
+    if (b && b !== s.last) return b;
+  }
+  return null;
+}
+
 function nearestBlock(x, y) {
   if (!boss.sealed && boss.core.alive) return blockWorld(boss.core);   // seekers and drones go for it too
   let best = null, bd = Infinity;
@@ -785,6 +809,7 @@ function update(dt) {
         s.vx = Math.cos(na) * spd; s.vy = Math.sin(na) * spd;
       }
     }
+    s.px = s.x; s.py = s.y;
     s.x += s.vx * dt; s.y += s.vy * dt;
     if (s.bounces > 0) {
       if (s.x < 0 || s.x > W) { s.vx *= -1; s.x = clamp(s.x, 0, W); s.bounces--; }
@@ -792,10 +817,7 @@ function update(dt) {
     }
   });
   shots = shots.filter(s => {
-    let hit = blockAtWorld(s.x, s.y);
-    // Once the core is exposed, rounds pass straight through the remaining
-    // blocks: only the core can stop them, so it is always hittable.
-    if (hit && !boss.sealed && hit.kind !== 'core') hit = null;
+    const hit = shotHit(s);
     if (hit && hit !== s.last) {
       let dmg = s.dmg * (hit.kind === 'gun' ? S.gunMult : hit.kind === 'core' ? S.coreMult : 1);
       const crit = Math.random() < S.crit;
@@ -1004,6 +1026,58 @@ function drawCoreFace(s, h, hurt, sealed) {
   glowOff();
 }
 
+// The block is its own health bar. The lost share of its health is a dark,
+// hollow shell; the rest stays lit, and the level drains like liquid toward
+// the bottom of the screen whichever way the boss is turned.
+function drawBlockFilled(b, s, h, base, sealed, frac) {
+  const f = clamp(frac, 0, 1);
+  const face = lit => {
+    if (b.kind === 'core') {
+      drawCoreFace(s, h, 0, sealed);
+      // the core face is mostly dark, so its remaining health gets a cyan wash
+      if (lit) { ctx.fillStyle = 'rgba(159,247,255,0.32)'; roundRect(-h, -h, s, s, 4); ctx.fill(); }
+      return;
+    }
+    if (lit) glowOn(base, 8);
+    drawPlate(s, h, base, 0);
+    glowOff();
+    if (b.kind === 'gun') drawGunFace(b, h, base);
+  };
+
+  // empty shell, plus an outline so a nearly drained block still reads
+  const a0 = ctx.globalAlpha;
+  ctx.globalAlpha = a0 * 0.22;
+  face(false);
+  ctx.globalAlpha = a0;
+  ctx.strokeStyle = shade(base, 0.15);
+  ctx.lineWidth = 1.2;
+  roundRect(-h + 0.5, -h + 0.5, s - 1, s - 1, 4); ctx.stroke();
+  if (f <= 0) return;
+
+  // how far the turned tile reaches up and down the screen
+  const ext = h * (Math.abs(Math.cos(boss.angle)) + Math.abs(Math.sin(boss.angle)));
+  const level = ext - 2 * ext * f;
+  ctx.save();
+  ctx.rotate(-boss.angle);
+  ctx.beginPath();
+  ctx.rect(-ext, level, 2 * ext, 2 * ext * f);
+  ctx.rotate(boss.angle);
+  ctx.clip();
+  face(true);
+  ctx.restore();
+
+  // the surface of the liquid
+  if (f < 1) {
+    ctx.save();
+    roundRect(-h, -h, s, s, 4); ctx.clip();
+    ctx.rotate(-boss.angle);
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-ext, level); ctx.lineTo(ext, level); ctx.stroke();
+    ctx.restore();
+  }
+}
+
 function drawBoss() {
   ctx.save();
   ctx.translate(boss.x, boss.y);
@@ -1024,14 +1098,8 @@ function drawBoss() {
     if (b.flash > 0) {
       ctx.fillStyle = '#ffffff';
       roundRect(-h, -h, s, s, 4); ctx.fill();
-    } else if (b.kind === 'core') {
-      drawCoreFace(s, h, hurt, sealed);
     } else {
-      glowOn(base, 8);
-      drawPlate(s, h, base, hurt);
-      glowOff();
-      if (b.kind === 'gun') drawGunFace(b, h, base);
-      if (hurt > 0.12) drawCracks(b, h, hurt);
+      drawBlockFilled(b, s, h, base, sealed, 1 - hurt);
     }
 
     ctx.globalAlpha = 1;
@@ -1117,32 +1185,6 @@ function panel(x, y, w, h, border, fill) {
 }
 
 // ---------- fight ----------
-// Health bars sit flat over each damaged block (not rotated with the boss) so
-// they stay readable, with a dark frame and a green-yellow-red fill. The core
-// gets a wider bar above it.
-function drawBlockBars() {
-  const c = boss.cell;
-  boss.blocks.forEach(b => {
-    if (!b.alive || b.kind === 'core' || b.hp >= b.maxHp) return;
-    const p = blockWorld(b);
-    const w = c * 0.8, h = 6, f = clamp(b.hp / b.maxHp, 0, 1);
-    ctx.fillStyle = 'rgba(0,0,0,0.9)';
-    ctx.fillRect(p.x - w / 2 - 2, p.y - h / 2 - 2, w + 4, h + 4);
-    ctx.fillStyle = f > 0.6 ? '#4dff88' : f > 0.3 ? '#ffd84a' : '#ff4a4a';
-    ctx.fillRect(p.x - w / 2, p.y - h / 2, w * f, h);
-  });
-  const core = boss.core;
-  if (core.alive && (!boss.sealed || core.hp < core.maxHp)) {
-    const p = blockWorld(core);
-    const w = c * 2.2, h = 8, y = p.y - c * 1.05, f = clamp(core.hp / core.maxHp, 0, 1);
-    ctx.fillStyle = 'rgba(0,0,0,0.9)';
-    ctx.fillRect(p.x - w / 2 - 2, y - h / 2 - 2, w + 4, h + 4);
-    glowOn('#9ff7ff', 10);
-    ctx.fillStyle = '#9ff7ff';
-    ctx.fillRect(p.x - w / 2, y - h / 2, w * f, h);
-    glowOff();
-  }
-}
 
 // The ship: a faceted hull lit from the upper left, a cockpit canopy, twin
 // engine nozzles that flare while thrusting, and blinking wingtip lights.
@@ -1253,7 +1295,6 @@ function drawWorld() {
   }
 
   drawBoss();
-  drawBlockBars();
 
   // beams: a thin telegraph while charging, a wide beam while firing
   beams.forEach(bm => {
