@@ -50,11 +50,22 @@ and roughly double core health.
 
 ## Upgrades
 
-Twelve lines, each stacking several levels, bought with salvage between fights:
-Rail Slugs, Feed Servos, Split Barrel, Ricochet Rounds, Volatile Rounds, Seeker
-Rounds, Turret Drone, Deflector, Plating, Thrusters, Tractor Coil, Pulse
-Capacitor. Salvage and upgrades persist across runs -- dying costs you the
-fight, not the progress.
+The hangar is an upgrade tree rooted at FIGHT, with 27 nodes across four branches:
+
+- **Weapons** (up) -- damage, fire rate, bullet speed, split barrel, crits,
+  penetrator rounds, ricochet, seekers, volatile rounds, and bonus damage to
+  gun blocks and cores
+- **Defence** (left) -- plating, nanite repair, deflector shields, faster
+  recharge, longer invulnerability after a hit
+- **Pulse and drones** (right) -- pulse charge rate, radius and damage; turret
+  drones plus their fire rate and damage
+- **Salvage and engines** (down) -- pickup range, top speed, and refineries
+  that raise red, blue and white yields
+
+A node unlocks once its parent has a level. Anything you can afford right now
+is highlighted green; owned nodes are gold, maxed ones teal. Hover a node for
+its next level and price. Salvage and upgrades persist across runs -- dying
+costs you the fight, not the progress.
 
 ## Local use
 

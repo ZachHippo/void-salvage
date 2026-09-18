@@ -89,35 +89,104 @@ function writeSave() {
 }
 
 // ---------- upgrades ----------
-// Twelve lines, each stacking several levels -- the shop is the meta game.
+// A tree rooted at FIGHT. A node unlocks once its parent has at least one
+// level; `pos` is its place on the hangar map in grid units from the centre.
+// Branches: weapons (up), defence (left), pulse and drones (right), salvage
+// and engines (down).
 const UPGRADES = [
-  { id: 'damage',    name: 'Rail Slugs',      max: 8, base: 45,  step: 1.36, price: { red: 1 },
+  // weapons
+  { id: 'damage',      name: 'Rail Slugs',      code: 'DMG', parent: null,        pos: [0, -1.6],
+    max: 8, base: 45,  step: 1.36, price: { red: 1 },
     desc: l => `+${l * 25}% bullet damage` },
-  { id: 'firerate',  name: 'Feed Servos',     max: 8, base: 45,  step: 1.36, price: { red: 1 },
+  { id: 'firerate',    name: 'Feed Servos',     code: 'ROF', parent: 'damage',    pos: [-1.6, -2.6],
+    max: 8, base: 45,  step: 1.36, price: { red: 1 },
     desc: l => `+${Math.round(0.16 * l * 100)}% fire rate` },
-  { id: 'multi',     name: 'Split Barrel',    max: 4, base: 130, step: 1.85, price: { red: 1, white: 0.03 },
+  { id: 'velocity',    name: 'Coil Barrel',     code: 'VEL', parent: 'damage',    pos: [1.6, -2.6],
+    max: 5, base: 50,  step: 1.4,  price: { red: 1 },
+    desc: l => `+${l * 15}% bullet speed` },
+  { id: 'gunHunter',   name: 'Turret Hunter',   code: 'GUN', parent: 'damage',    pos: [0, -3.3],
+    max: 5, base: 70,  step: 1.45, price: { red: 1 },
+    desc: l => `+${l * 25}% damage to gun blocks` },
+  { id: 'coreBreaker', name: 'Core Breaker',    code: 'CORE', parent: 'gunHunter', pos: [0, -4.6],
+    max: 5, base: 150, step: 1.7,  price: { red: 1, white: 0.03 },
+    desc: l => `+${l * 30}% damage to the core` },
+  { id: 'multi',       name: 'Split Barrel',    code: 'x2',  parent: 'firerate',  pos: [-3.1, -3.1],
+    max: 4, base: 130, step: 1.85, price: { red: 1, white: 0.03 },
     desc: l => `+${l} projectile${l > 1 ? 's' : ''} per shot` },
-  { id: 'ricochet',  name: 'Ricochet Rounds', max: 3, base: 150, step: 1.9, price: { blue: 1, white: 0.03 },
-    desc: l => `rounds bounce ${l}x off the arena` },
-  { id: 'explosive', name: 'Volatile Rounds', max: 4, base: 170, step: 1.85, price: { red: 1, white: 0.03 },
+  { id: 'crit',        name: 'Weak Point Scan', code: 'CRT', parent: 'firerate',  pos: [-1.6, -4.1],
+    max: 5, base: 140, step: 1.7,  price: { red: 1, white: 0.02 },
+    desc: l => `${l * 8}% chance to deal double damage` },
+  { id: 'explosive',   name: 'Volatile Rounds', code: 'BOOM', parent: 'multi',    pos: [-4.6, -3.6],
+    max: 4, base: 170, step: 1.85, price: { red: 1, white: 0.03 },
     desc: l => `hits splash ${28 + l * 12}px into the hull` },
-  { id: 'homing',    name: 'Seeker Rounds',   max: 3, base: 165, step: 1.85, price: { blue: 1, white: 0.03 },
+  { id: 'pierce',      name: 'Penetrator',      code: 'PRC', parent: 'velocity',  pos: [1.6, -4.1],
+    max: 3, base: 180, step: 1.9,  price: { red: 1, white: 0.03 },
+    desc: l => `rounds punch through ${l} extra block${l > 1 ? 's' : ''}` },
+  { id: 'ricochet',    name: 'Ricochet Rounds', code: 'RIC', parent: 'velocity',  pos: [3.1, -3.1],
+    max: 3, base: 150, step: 1.9,  price: { blue: 1, white: 0.03 },
+    desc: l => `rounds bounce ${l}x off the arena` },
+  { id: 'homing',      name: 'Seeker Rounds',   code: 'SEEK', parent: 'ricochet', pos: [4.6, -3.6],
+    max: 3, base: 165, step: 1.85, price: { blue: 1, white: 0.03 },
     desc: l => `rounds curve toward armour` },
-  { id: 'drone',     name: 'Turret Drone',    max: 4, base: 210, step: 1.9, price: { red: 0.6, blue: 0.6, white: 0.04 },
-    desc: l => `${l} drone${l > 1 ? 's' : ''} orbit and fire for you` },
-  { id: 'shield',    name: 'Deflector',       max: 6, base: 95,  step: 1.52, price: { blue: 1 },
-    desc: l => `+${l * 20} shield, recharges out of fire` },
-  { id: 'hull',      name: 'Plating',         max: 6, base: 85,  step: 1.48, price: { blue: 1 },
+
+  // defence
+  { id: 'hull',        name: 'Plating',         code: 'HULL', parent: null,       pos: [-2.2, 0],
+    max: 6, base: 85,  step: 1.48, price: { blue: 1 },
     desc: l => `+${l * 25} hull` },
-  { id: 'speed',     name: 'Thrusters',       max: 5, base: 75,  step: 1.42, price: { blue: 1 },
-    desc: l => `+${l * 10}% top speed` },
-  { id: 'magnet',    name: 'Tractor Coil',    max: 5, base: 65,  step: 1.42, price: { red: 0.5, blue: 0.5 },
-    desc: l => `+${l * 40}% salvage pickup range` },
-  { id: 'pulse',     name: 'Pulse Capacitor', max: 5, base: 115, step: 1.5, price: { blue: 1, white: 0.02 },
+  { id: 'regen',       name: 'Nanite Repair',   code: 'REP', parent: 'hull',      pos: [-3.7, -0.9],
+    max: 5, base: 110, step: 1.55, price: { blue: 1 },
+    desc: l => `repair ${(l * 1.5).toFixed(1)} hull per second` },
+  { id: 'shield',      name: 'Deflector',       code: 'SHLD', parent: 'hull',     pos: [-3.7, 0.9],
+    max: 6, base: 95,  step: 1.52, price: { blue: 1 },
+    desc: l => `+${l * 20} shield, recharges out of fire` },
+  { id: 'shieldRegen', name: 'Capacitor Bank',  code: 'CHG', parent: 'shield',    pos: [-5.2, 0.3],
+    max: 5, base: 100, step: 1.5,  price: { blue: 1 },
+    desc: l => `shield recharges ${l * 30}% faster` },
+  { id: 'invuln',      name: 'Phase Frame',     code: 'PHS', parent: 'shield',    pos: [-5.2, 1.7],
+    max: 4, base: 130, step: 1.6,  price: { blue: 1, white: 0.02 },
+    desc: l => `+${(l * 0.15).toFixed(2)}s invulnerable after a hit` },
+
+  // pulse and drones
+  { id: 'pulse',       name: 'Pulse Capacitor', code: 'PLS', parent: null,        pos: [2.2, 0],
+    max: 5, base: 115, step: 1.5,  price: { blue: 1, white: 0.02 },
     desc: l => `pulse charges ${l * 20}% faster` },
+  { id: 'pulseRadius', name: 'Wide Emitter',    code: 'RAD', parent: 'pulse',     pos: [3.7, -0.9],
+    max: 4, base: 90,  step: 1.5,  price: { blue: 1 },
+    desc: l => `+${l * 15}% pulse radius` },
+  { id: 'pulseDmg',    name: 'Overcharge',      code: 'OVR', parent: 'pulseRadius', pos: [5.2, -1.4],
+    max: 5, base: 110, step: 1.55, price: { blue: 1 },
+    desc: l => `+${l * 40}% pulse damage` },
+  { id: 'drone',       name: 'Turret Drone',    code: 'DRN', parent: 'pulse',     pos: [3.7, 0.9],
+    max: 4, base: 210, step: 1.9,  price: { red: 0.6, blue: 0.6, white: 0.04 },
+    desc: l => `${l} drone${l > 1 ? 's' : ''} orbit and fire for you` },
+  { id: 'droneRate',   name: 'Drone Loaders',   code: 'DRF', parent: 'drone',     pos: [5.2, 0.4],
+    max: 4, base: 180, step: 1.7,  price: { red: 0.6, blue: 0.6 },
+    desc: l => `drones fire ${l * 25}% faster` },
+  { id: 'droneDmg',    name: 'Drone Ordnance',  code: 'DRD', parent: 'drone',     pos: [5.2, 1.8],
+    max: 4, base: 200, step: 1.75, price: { red: 0.6, blue: 0.6, white: 0.03 },
+    desc: l => `+${l * 30}% drone damage` },
+
+  // salvage and engines
+  { id: 'magnet',      name: 'Tractor Coil',    code: 'MAG', parent: null,        pos: [0, 1.8],
+    max: 5, base: 65,  step: 1.42, price: { red: 0.5, blue: 0.5 },
+    desc: l => `+${l * 40}% salvage pickup range` },
+  { id: 'speed',       name: 'Thrusters',       code: 'SPD', parent: 'magnet',    pos: [-1.6, 2.8],
+    max: 5, base: 75,  step: 1.42, price: { blue: 1 },
+    desc: l => `+${l * 10}% top speed` },
+  { id: 'redYield',    name: 'Shard Refinery',  code: 'RED', parent: 'magnet',    pos: [0, 3.2],
+    max: 5, base: 120, step: 1.6,  price: { blue: 1 },
+    desc: l => `+${l * 20}% red from gun blocks and cores` },
+  { id: 'blueYield',   name: 'Orb Condenser',   code: 'BLU', parent: 'magnet',    pos: [1.6, 2.8],
+    max: 5, base: 120, step: 1.6,  price: { red: 1 },
+    desc: l => `+${l * 20}% blue from armour and cores` },
+  { id: 'whiteYield',  name: 'Crystal Lattice', code: 'WHT', parent: 'blueYield', pos: [3.1, 3.4],
+    max: 3, base: 250, step: 1.9,  price: { red: 0.7, blue: 0.7, white: 0.05 },
+    desc: l => `+${l} white crystal${l > 1 ? 's' : ''} per core` },
 ];
+const UP_BY_ID = Object.fromEntries(UPGRADES.map(u => [u.id, u]));
 
 function lvlOf(id) { return save.upgrades[id] || 0; }
+function isUnlocked(up) { return !up.parent || lvlOf(up.parent) > 0; }
 // A price is a weight per currency, scaled by the level curve. Every currency an
 // upgrade needs costs at least 1, so a white-crystal line never becomes free.
 function costOf(up, level) {
@@ -130,19 +199,35 @@ function canAfford(cost) { return Object.keys(cost).every(k => save.wallet[k] >=
 
 let S = {};
 function computeStats() {
+  const L = lvlOf;
   S = {
-    damage:    Math.round(10 * (1 + 0.25 * lvlOf('damage'))),
-    fireDelay: 0.15 / (1 + 0.16 * lvlOf('firerate')),
-    shots:     1 + lvlOf('multi'),
-    ricochet:  lvlOf('ricochet'),
-    splash:    lvlOf('explosive') ? 28 + lvlOf('explosive') * 12 : 0,
-    homing:    lvlOf('homing'),
-    drones:    lvlOf('drone'),
-    maxShield: lvlOf('shield') * 20,
-    maxHull:   100 + lvlOf('hull') * 25,
-    topSpeed:  340 * (1 + 0.10 * lvlOf('speed')),
-    magnet:    150 * (1 + 0.40 * lvlOf('magnet')),
-    pulseRate: 1 + 0.20 * lvlOf('pulse'),
+    damage:      Math.round(10 * (1 + 0.25 * L('damage'))),
+    fireDelay:   0.15 / (1 + 0.16 * L('firerate')),
+    shotSpeed:   760 * (1 + 0.15 * L('velocity')),
+    shots:       1 + L('multi'),
+    crit:        0.08 * L('crit'),
+    pierce:      L('pierce'),
+    gunMult:     1 + 0.25 * L('gunHunter'),
+    coreMult:    1 + 0.30 * L('coreBreaker'),
+    ricochet:    L('ricochet'),
+    splash:      L('explosive') ? 28 + L('explosive') * 12 : 0,
+    homing:      L('homing'),
+    maxHull:     100 + L('hull') * 25,
+    regen:       1.5 * L('regen'),
+    maxShield:   L('shield') * 20,
+    shieldRate:  14 * (1 + 0.30 * L('shieldRegen')),
+    shieldDelay: 2.5 * (1 - 0.12 * L('shieldRegen')),
+    iframes:     0.55 + 0.15 * L('invuln'),
+    pulseRate:   1 + 0.20 * L('pulse'),
+    pulseRadius: 260 * (1 + 0.15 * L('pulseRadius')),
+    pulseDmg:    4 * (1 + 0.40 * L('pulseDmg')),
+    drones:      L('drone'),
+    droneDelay:  0.5 / (1 + 0.25 * L('droneRate')),
+    droneDmg:    0.6 * (1 + 0.30 * L('droneDmg')),
+    topSpeed:    340 * (1 + 0.10 * L('speed')),
+    magnet:      150 * (1 + 0.40 * L('magnet')),
+    yield:       { red: 1 + 0.2 * L('redYield'), blue: 1 + 0.2 * L('blueYield'), white: 1 },
+    whiteBonus:  L('whiteYield'),
   };
 }
 computeStats();
@@ -371,14 +456,14 @@ function breakBlock(b) {
   const drop = (cur, n, value) => {
     for (let i = 0; i < n; i++) {
       orbs.push({ x: w.x + rand(-8, 8), y: w.y + rand(-8, 8), vx: rand(-80, 80), vy: rand(-80, 80),
-                  r: 5, cur, value: Math.max(1, Math.round(value)) });
+                  r: 5, cur, value: Math.max(1, Math.round(value * (S.yield[cur] || 1))) });
     }
   };
   if (b.kind === 'armour') drop('blue', 2, (2 + L * 0.8) / 2);
   if (b.kind === 'gun')    drop('red', 3, (6 + L * 2.4) / 3);
   if (isCore) {
     const g = boss.guardian ? 2 : 1;
-    drop('white', 3 + Math.floor(L / 2) * g, 1);
+    drop('white', 3 + Math.floor(L / 2) * g + S.whiteBonus, 1);
     drop('red', 6, (20 + L * 6) * g / 6);
     drop('blue', 6, (20 + L * 6) * g / 6);
   }
@@ -391,7 +476,7 @@ function breakBlock(b) {
   if (boss.armourLeft <= boss.armourTotal * 0.2) boss.sealed = false;
 }
 
-function damageBlock(b, dmg) {
+function damageBlock(b, dmg, crit) {
   if (!b.alive) return;
   if (b.kind === 'core' && boss.sealed) { b.flash = 0.08; return; }
   b.hp -= dmg;
@@ -399,7 +484,7 @@ function damageBlock(b, dmg) {
   // Arcade-style damage numbers, capped so a drone swarm cannot flood the screen.
   if (popups.length < 70) {
     const w = blockWorld(b);
-    popups.push({ x: w.x + rand(-6, 6), y: w.y + rand(-6, 6), text: String(Math.round(dmg)), age: 0, life: 0.55 });
+    popups.push({ x: w.x + rand(-6, 6), y: w.y + rand(-6, 6), text: String(Math.round(dmg)), crit: !!crit, age: 0, life: crit ? 0.8 : 0.55 });
   }
   if (b.hp <= 0) breakBlock(b);
 }
@@ -498,8 +583,8 @@ function firePlayer() {
     shots.push({
       x: player.x + Math.cos(a) * player.radius,
       y: player.y + Math.sin(a) * player.radius,
-      vx: Math.cos(a) * 760, vy: Math.sin(a) * 760,
-      r: 4, dmg: S.damage, bounces: S.ricochet,
+      vx: Math.cos(a) * S.shotSpeed, vy: Math.sin(a) * S.shotSpeed,
+      r: 4, dmg: S.damage, bounces: S.ricochet, pierce: S.pierce, last: null,
     });
   }
 }
@@ -508,7 +593,7 @@ function fireDrone(d) {
   const t = nearestBlock(d.x, d.y);
   if (!t) return;
   const a = Math.atan2(t.y - d.y, t.x - d.x);
-  shots.push({ x: d.x, y: d.y, vx: Math.cos(a) * 700, vy: Math.sin(a) * 700, r: 3, dmg: S.damage * 0.6, bounces: 0 });
+  shots.push({ x: d.x, y: d.y, vx: Math.cos(a) * 700, vy: Math.sin(a) * 700, r: 3, dmg: S.damage * S.droneDmg, bounces: 0 });
 }
 
 // ---------- update ----------
@@ -529,8 +614,8 @@ function driftField(dt, vx, vy) {
 
 function hurtPlayer(amount) {
   if (player.invuln > 0) return;
-  player.invuln = 0.55;
-  player.shieldTimer = 2.5;
+  player.invuln = S.iframes;
+  player.shieldTimer = S.shieldDelay;
   if (player.shield > 0) {
     player.shield -= amount;
     if (player.shield < 0) { player.hull += player.shield; player.shield = 0; }
@@ -571,8 +656,9 @@ function update(dt) {
   player.trail = player.trail.filter(p => p.age < p.life);
 
   if (player.invuln > 0) player.invuln -= dt;
+  if (S.regen) player.hull = Math.min(S.maxHull, player.hull + S.regen * dt);
   if (player.shieldTimer > 0) player.shieldTimer -= dt;
-  else if (player.shield < S.maxShield) player.shield = Math.min(S.maxShield, player.shield + 14 * dt);
+  else if (player.shield < S.maxShield) player.shield = Math.min(S.maxShield, player.shield + S.shieldRate * dt);
 
   fireTimer -= dt;
   if (mouse.down && fireTimer <= 0) { fireTimer = S.fireDelay; firePlayer(); }
@@ -581,10 +667,10 @@ function update(dt) {
   if (keys['e'] && player.pulse >= player.maxPulse) {
     player.pulse = 0;
     shake = Math.max(shake, 16);
-    pulseRing = { r: 0, max: 260, age: 0, life: 0.45 };
+    pulseRing = { r: 0, max: S.pulseRadius, age: 0, life: 0.45 };
     spawnParticles(player.x, player.y, '#9ff7ff', 40, 260);
-    flak = flak.filter(f => dist(f.x, f.y, player.x, player.y) >= 260);
-    splashDamage(player.x, player.y, 260, 4 * S.damage);
+    flak = flak.filter(f => dist(f.x, f.y, player.x, player.y) >= S.pulseRadius);
+    splashDamage(player.x, player.y, S.pulseRadius, S.pulseDmg * S.damage);
   }
 
   // --- boss ---
@@ -604,7 +690,7 @@ function update(dt) {
     d.x = player.x + Math.cos(d.phase) * 52;
     d.y = player.y + Math.sin(d.phase) * 52;
     d.timer -= dt;
-    if (d.timer <= 0) { d.timer = 0.5; fireDrone(d); }
+    if (d.timer <= 0) { d.timer = S.droneDelay; fireDrone(d); }
   });
 
   // --- player shots ---
@@ -628,11 +714,16 @@ function update(dt) {
   });
   shots = shots.filter(s => {
     const hit = blockAtWorld(s.x, s.y);
-    if (hit) {
-      damageBlock(hit, s.dmg);
+    if (hit && hit !== s.last) {
+      let dmg = s.dmg * (hit.kind === 'gun' ? S.gunMult : hit.kind === 'core' ? S.coreMult : 1);
+      const crit = Math.random() < S.crit;
+      if (crit) dmg *= 2;
+      damageBlock(hit, dmg, crit);
       if (S.splash) splashDamage(s.x, s.y, S.splash, s.dmg * 0.5);
       spawnParticles(s.x, s.y, '#ffd166', 5, 90);
-      return false;
+      // a penetrator round keeps going, but never re-hits the block it is inside
+      if (s.pierce > 0) { s.pierce--; s.last = hit; }
+      else return false;
     }
     return s.x > -30 && s.x < canvas.width + 30 && s.y > -30 && s.y < canvas.height + 30;
   });
@@ -1027,8 +1118,8 @@ function drawPopups() {
     ctx.globalAlpha = Math.min(1, a * 1.8);
     ctx.fillStyle = '#1a0d1e';
     ctx.fillText(p.text, p.x + 2, y + 2);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(p.text, p.x, y);
+    ctx.fillStyle = p.crit ? '#ffd84a' : '#ffffff';
+    ctx.fillText(p.crit ? p.text + '!' : p.text, p.x, y);
   });
   ctx.globalAlpha = 1;
   ctx.textAlign = 'left';
@@ -1133,119 +1224,211 @@ function walletRow(cy, wallet, prefix, cell) {
 }
 
 // ---------- hangar ----------
-// Layout is computed once and shared by the renderer and the click handler, so
-// what you see is exactly what you can click.
+// The upgrade tree. Layout is computed once per frame and shared by the
+// renderer and the click handler, so what you see is exactly what you can click.
 function hangarLayout() {
-  const cols = canvas.width < 900 ? 2 : (canvas.width < 1250 ? 3 : 4);
-  const cw = 268, ch = 104, gap = 14;
-  const totalW = cols * cw + (cols - 1) * gap;
-  const x0 = (canvas.width - totalW) / 2;
-  const y0 = 190;
-  const cards = UPGRADES.map((up, i) => {
+  const top = 96, bottom = 34;
+  const unit = Math.max(40, Math.min((canvas.width - 60) / 11.6, (canvas.height - top - bottom) / 9.4));
+  const cx = canvas.width / 2;
+  const cy = top + 5 * unit;
+  const size = Math.round(unit * 0.66);
+  const nodes = UPGRADES.map(up => {
     const level = lvlOf(up.id);
     const maxed = level >= up.max;
+    const unlocked = isUnlocked(up);
     const cost = maxed ? {} : costOf(up, level);
     return {
-      up, level, maxed, cost,
-      afford: !maxed && canAfford(cost),
-      x: x0 + (i % cols) * (cw + gap),
-      y: y0 + Math.floor(i / cols) * (ch + gap),
-      w: cw, h: ch,
+      up, level, maxed, unlocked, cost,
+      afford: unlocked && !maxed && canAfford(cost),
+      x: cx + up.pos[0] * unit, y: cy + up.pos[1] * unit, size,
     };
   });
-  const rows = Math.ceil(UPGRADES.length / cols);
-  const launch = { x: canvas.width / 2 - 150, y: y0 + rows * (ch + gap) + 12, w: 300, h: 58 };
-  return { cards, launch };
+  const fight = { x: cx - unit * 0.95, y: cy - unit * 0.42, w: unit * 1.9, h: unit * 0.84 };
+  return { nodes, fight, cx, cy };
+}
+
+function nodeAt(nodes, mx, my) {
+  return nodes.find(n => Math.abs(mx - n.x) <= n.size / 2 + 3 && Math.abs(my - n.y) <= n.size / 2 + 3) || null;
+}
+
+// Green means you can buy it right now. Gold is owned, teal is maxed, grey is
+// available but out of reach, and near-black is still locked behind its parent.
+function nodeStyle(n) {
+  if (n.afford)    return { border: '#4dd06a', fill: 'rgba(22,72,36,0.96)', text: '#ffffff', link: '#4dd06a' };
+  if (n.maxed)     return { border: '#8fd0c6', fill: 'rgba(20,40,44,0.96)', text: '#8fd0c6', link: '#8fd0c6' };
+  if (!n.unlocked) return { border: '#2a3038', fill: 'rgba(12,14,18,0.96)', text: '#3a424c', link: '#232932' };
+  if (n.level > 0) return { border: '#ffd84a', fill: 'rgba(42,38,18,0.96)', text: '#ffd84a', link: '#ffd84a' };
+  return             { border: '#5d6875', fill: 'rgba(22,26,32,0.96)', text: '#9aa4b0', link: '#4a5462' };
+}
+
+function costRow(cost, rightX, baseY, dim) {
+  let rx = rightX;
+  Object.keys(cost).sort((a, b) => CUR_ORDER.indexOf(b) - CUR_ORDER.indexOf(a)).forEach(k => {
+    const txt = String(cost[k]);
+    ctx.font = px(8);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = !dim && save.wallet[k] >= cost[k] ? CUR[k].text : '#5d6470';
+    ctx.fillText(txt, rx, baseY);
+    rx -= ctx.measureText(txt).width + 13;
+    pixelIcon(rx + 4, baseY - 4, k, 2);
+    rx -= 12;
+  });
+}
+
+function drawTooltip(n) {
+  const w = 320, h = 128;
+  let x = n.x + n.size / 2 + 14;
+  if (x + w > canvas.width - 10) x = n.x - n.size / 2 - 14 - w;
+  const y = clamp(n.y - h / 2, 10, canvas.height - h - 10);
+  const st = nodeStyle(n);
+  panel(x, y, w, h, st.border, 'rgba(18,22,28,0.97)');
+
+  ctx.textAlign = 'left';
+  ctx.font = px(10);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(n.up.name.toUpperCase(), x + 16, y + 28);
+  ctx.textAlign = 'right';
+  ctx.font = px(8);
+  ctx.fillStyle = '#9fd3cc';
+  ctx.fillText(`LV ${n.level}/${n.up.max}`, x + w - 16, y + 28);
+
+  ctx.textAlign = 'left';
+  ctx.font = px(7);
+  ctx.fillStyle = '#cfe9e4';
+  const next = n.maxed ? n.level : n.level + 1;
+  ctx.fillText((n.maxed ? 'NOW: ' : 'NEXT: ') + n.up.desc(next).toUpperCase(), x + 16, y + 56);
+
+  ctx.font = px(8);
+  if (!n.unlocked) {
+    ctx.fillStyle = '#ff5a66';
+    ctx.fillText(`LOCKED - NEEDS ${UP_BY_ID[n.up.parent].name.toUpperCase()}`, x + 16, y + 100);
+  } else if (n.maxed) {
+    ctx.fillStyle = '#8fd0c6';
+    ctx.fillText('FULLY UPGRADED', x + 16, y + 100);
+  } else {
+    ctx.fillStyle = n.afford ? '#4dd06a' : '#8a93a0';
+    ctx.fillText(n.afford ? 'CLICK TO BUY' : 'NOT ENOUGH', x + 16, y + 100);
+    costRow(n.cost, x + w - 16, y + 100, false);
+  }
 }
 
 function drawHangar() {
   pixelPass(drawBackdrop);
-  ctx.fillStyle = 'rgba(12,6,16,0.55)';
+  ctx.fillStyle = 'rgba(12,6,16,0.5)';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   scanlines();
 
-  const cx = canvas.width / 2;
-  ctx.textAlign = 'center';
-  ctx.font = px(26);
-  ctx.fillStyle = '#e0444f';
-  ctx.fillText('HANGAR', cx + 3, 62);
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText('HANGAR', cx, 59);
-  ctx.font = px(8);
-  ctx.fillStyle = '#9fd3cc';
-  const next = save.level % 5 === 0 ? `GUARD ${save.level / 5}  (LV ${save.level})` : `LEVEL ${save.level}`;
-  ctx.fillText(`NEXT: ${next}      BEST: ${save.bestLevel}`, cx, 88);
+  const { nodes, fight, cx, cy } = hangarLayout();
+  const byId = Object.fromEntries(nodes.map(n => [n.up.id, n]));
+  const blink = 0.5 + 0.5 * Math.sin(performance.now() / 180);
 
-  panel(cx - 240, 104, 480, 62);
-  walletRow(135, save.wallet, '', 4);
-
-  const { cards, launch } = hangarLayout();
-  cards.forEach(c => {
-    const border = c.maxed ? '#8fd0c6' : (c.afford ? '#ffd84a' : '#4a5462');
-    panel(c.x, c.y, c.w, c.h, border, c.afford ? 'rgba(44,40,26,0.94)' : 'rgba(26,32,38,0.92)');
-
-    ctx.textAlign = 'left';
-    ctx.font = px(9);
-    ctx.fillStyle = c.afford || c.maxed ? '#ffffff' : '#8a93a0';
-    ctx.fillText(c.up.name.toUpperCase(), c.x + 14, c.y + 26);
-
-    ctx.font = px(7);
-    ctx.fillStyle = '#9fb0b0';
-    ctx.fillText(c.up.desc(Math.max(1, c.level + (c.maxed ? 0 : 1))).toUpperCase(), c.x + 14, c.y + 46);
-
-    for (let i = 0; i < c.up.max; i++) {
-      ctx.fillStyle = i < c.level ? '#ffd84a' : '#3a424e';
-      ctx.fillRect(c.x + 14 + i * 14, c.y + 58, 10, 6);
-    }
-
-    if (c.maxed) {
-      ctx.textAlign = 'right';
-      ctx.font = px(9);
-      ctx.fillStyle = '#8fd0c6';
-      ctx.fillText('MAX', c.x + c.w - 14, c.y + c.h - 14);
-      return;
-    }
-    // costs, laid out right to left: icon + amount per currency
-    let rx = c.x + c.w - 14;
-    Object.keys(c.cost).sort((a, b) => CUR_ORDER.indexOf(b) - CUR_ORDER.indexOf(a)).forEach(k => {
-      const txt = String(c.cost[k]);
-      ctx.font = px(8);
-      ctx.textAlign = 'right';
-      ctx.fillStyle = save.wallet[k] >= c.cost[k] ? CUR[k].text : '#5d6470';
-      ctx.fillText(txt, rx, c.y + c.h - 14);
-      rx -= ctx.measureText(txt).width + 13;
-      pixelIcon(rx + 4, c.y + c.h - 18, k, 2);
-      rx -= 12;
-    });
+  // links first, so nodes sit on top of them
+  nodes.forEach(n => {
+    const from = n.up.parent ? byId[n.up.parent] : { x: cx, y: cy };
+    const st = nodeStyle(n);
+    ctx.strokeStyle = st.link;
+    ctx.lineWidth = n.afford ? 4 : 3;
+    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(n.x, n.y); ctx.stroke();
   });
 
-  panel(launch.x, launch.y, launch.w, launch.h, '#7cf29a', '#2e8a45');
+  // FIGHT sits at the root of every branch
+  panel(fight.x, fight.y, fight.w, fight.h, '#7cf29a', '#2e8a45');
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
-  ctx.font = px(16);
-  ctx.fillText('FIGHT', launch.x + launch.w / 2, launch.y + 37);
+  ctx.font = px(14);
+  ctx.fillText('FIGHT', cx, cy + 2);
+  ctx.font = px(7);
+  ctx.fillStyle = '#c9ffd6';
+  ctx.fillText(save.level % 5 === 0 ? `GUARD ${save.level / 5}` : `LEVEL ${save.level}`, cx, cy + 20);
 
+  const hover = nodeAt(nodes, mouse.x, mouse.y);
+  nodes.forEach(n => {
+    const st = nodeStyle(n);
+    const s = n.size;
+    if (n.afford) {
+      // affordable nodes breathe, so they are easy to spot across the tree
+      ctx.strokeStyle = `rgba(77,208,106,${0.25 + blink * 0.5})`;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(n.x - s / 2 - 6, n.y - s / 2 - 6, s + 12, s + 12);
+    }
+    panel(n.x - s / 2, n.y - s / 2, s, s, n === hover ? '#ffffff' : st.border, st.fill);
+    ctx.textAlign = 'center';
+    ctx.font = px(n.up.code.length > 3 ? 7 : 8);
+    ctx.fillStyle = st.text;
+    ctx.fillText(n.up.code, n.x, n.y + 4);
+
+    // level pips under the node
+    const pw = 5, gap = 2, total = n.up.max * pw + (n.up.max - 1) * gap;
+    for (let i = 0; i < n.up.max; i++) {
+      ctx.fillStyle = i < n.level ? (n.maxed ? '#8fd0c6' : '#ffd84a') : '#2c333c';
+      ctx.fillRect(n.x - total / 2 + i * (pw + gap), n.y + s / 2 + 5, pw, 4);
+    }
+  });
+
+  // top bar: resources, title, player stats
+  panel(14, 14, 330, 66);
+  ctx.textAlign = 'left';
+  ctx.font = px(7);
+  ctx.fillStyle = '#9fd3cc';
+  ctx.fillText('RESOURCES', 28, 34);
+  CUR_ORDER.forEach((k, i) => {
+    const x = 36 + i * 104;
+    pixelIcon(x, 56, k, 3);
+    ctx.font = px(10);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = CUR[k].text;
+    ctx.fillText(String(save.wallet[k]), x + 16, 62);
+  });
+
+  ctx.textAlign = 'center';
+  ctx.font = px(22);
+  ctx.fillStyle = '#e0444f';
+  ctx.fillText('HANGAR', canvas.width / 2 + 3, 49);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('HANGAR', canvas.width / 2, 46);
+  ctx.font = px(7);
+  ctx.fillStyle = '#9fd3cc';
+  ctx.fillText(`BEST LEVEL ${save.bestLevel}`, canvas.width / 2, 70);
+
+  const sx = canvas.width - 14 - 330;
+  panel(sx, 14, 330, 66);
+  ctx.textAlign = 'left';
+  ctx.font = px(7);
+  ctx.fillStyle = '#9fd3cc';
+  ctx.fillText('PLAYER STATS', sx + 14, 34);
+  ctx.font = px(9);
+  [['DMG', S.damage, '#ff5a66'], ['HULL', S.maxHull, '#4dd06a'], ['SHLD', S.maxShield, '#3f9fd8']].forEach(([label, v, col], i) => {
+    const x = sx + 14 + i * 106;
+    ctx.fillStyle = '#8a93a0';
+    ctx.font = px(7);
+    ctx.fillText(label, x, 60);
+    ctx.fillStyle = col;
+    ctx.font = px(10);
+    ctx.fillText(String(v), x + ctx.measureText(label).width + 12, 62);
+  });
+
+  ctx.textAlign = 'center';
   ctx.font = px(7);
   ctx.fillStyle = 'rgba(207,233,228,0.5)';
-  ctx.fillText('CLICK AN UPGRADE TO BUY   -   ENTER OR FIGHT TO LAUNCH   -   R RESETS SAVE', cx, launch.y + launch.h + 24);
+  ctx.fillText('HOVER A NODE FOR DETAILS  -  GREEN = YOU CAN AFFORD IT  -  CLICK TO BUY  -  ENTER TO FIGHT  -  R RESETS SAVE',
+               canvas.width / 2, canvas.height - 14);
+
+  if (hover) drawTooltip(hover);
   ctx.textAlign = 'left';
 }
 
 function hangarClick(mx, my) {
-  const { cards, launch } = hangarLayout();
-  if (mx >= launch.x && mx <= launch.x + launch.w && my >= launch.y && my <= launch.y + launch.h) {
+  const { nodes, fight } = hangarLayout();
+  if (mx >= fight.x && mx <= fight.x + fight.w && my >= fight.y && my <= fight.y + fight.h) {
     startFight();
     return;
   }
-  for (const c of cards) {
-    if (mx < c.x || mx > c.x + c.w || my < c.y || my > c.y + c.h) continue;
-    if (c.maxed || !c.afford) return;
-    for (const k in c.cost) save.wallet[k] -= c.cost[k];
-    save.upgrades[c.up.id] = c.level + 1;
-    computeStats();
-    writeSave();
-    return;
-  }
+  const n = nodeAt(nodes, mx, my);
+  if (!n || !n.afford) return;
+  for (const k in n.cost) save.wallet[k] -= n.cost[k];
+  save.upgrades[n.up.id] = n.level + 1;
+  computeStats();
+  writeSave();
 }
 
 // ---------- other screens ----------
