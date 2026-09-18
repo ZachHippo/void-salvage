@@ -11,36 +11,22 @@ const screenCtx = canvas.getContext('2d');
 // browser stretching a low-resolution canvas.
 let W = window.innerWidth, H = window.innerHeight, DPR = 1;
 
-// The world is drawn into a buffer PX times smaller than the screen, then blown
-// up with smoothing off -- every shape lands on a chunky pixel grid, the way a
-// 90s arcade board rendered. HUD text is drawn afterwards at full resolution
-// in a pixel font so it stays crisp and readable.
-const PX = 2;
-const lowCanvas = document.createElement('canvas');
-const lowCtx = lowCanvas.getContext('2d');
-let ctx = screenCtx;             // whichever surface the draw calls target right now
+const ctx = screenCtx;
 
-function px(n) { return `${n}px "Press Start 2P", monospace`; }
+// Text sizes below are written on the old pixel-font scale; this maps them onto
+// the monospace look, bolding the larger headings.
+function font(n) { return `${n >= 12 ? 'bold ' : ''}${Math.round(n * 1.55)}px monospace`; }
 
-// Run the draw callback in the pixel buffer, in screen coordinates, then blit.
-function pixelPass(draw) {
-  ctx = lowCtx;
-  lowCtx.setTransform(1 / PX, 0, 0, 1 / PX, 0, 0);
-  lowCtx.clearRect(0, 0, W, H);
-  draw();
-  lowCtx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx = screenCtx;
-  screenCtx.imageSmoothingEnabled = false;
-  screenCtx.drawImage(lowCanvas, 0, 0, lowCanvas.width * PX, lowCanvas.height * PX);
-}
+function glowOn(color, blur) { ctx.shadowColor = color; ctx.shadowBlur = blur; }
+function glowOff() { ctx.shadowBlur = 0; }
 
 // ---------- currencies ----------
 // Blocks pay out in the colour they are: blue armour drops blue orbs, red guns
 // drop red shards, and only a core drops white crystals.
 const CUR = {
-  white: { color: '#f4f2ff', shape: 'diamond' },
-  red:   { color: '#e8434f', shape: 'diamond' },
-  blue:  { color: '#5a4fe0', shape: 'circle' },
+  white: { color: '#eaf6ff', shape: 'diamond' },
+  red:   { color: '#ff6b9f', shape: 'diamond' },
+  blue:  { color: '#8b7dff', shape: 'circle' },
 };
 const CUR_ORDER = ['white', 'red', 'blue'];
 function emptyWallet() { return { white: 0, red: 0, blue: 0 }; }
@@ -282,8 +268,6 @@ function resize() {
   canvas.style.width = W + 'px';
   canvas.style.height = H + 'px';
   screenCtx.setTransform(DPR, 0, 0, DPR, 0, 0);   // resizing a canvas resets its transform
-  lowCanvas.width = Math.ceil(W / PX);
-  lowCanvas.height = Math.ceil(H / PX);
   reflowField();
 }
 window.addEventListener('resize', resize);
@@ -305,7 +289,7 @@ function drawFsButton() {
   const on = !!document.fullscreenElement;
   panel(b.x, b.y, b.w, b.h, '#8fd0c6', 'rgba(26,32,38,0.92)');
   ctx.textAlign = 'center';
-  ctx.font = px(8);
+  ctx.font = font(8);
   ctx.fillStyle = '#cfe9e4';
   ctx.fillText(on ? '[F] WINDOWED' : '[F] FULLSCREEN', b.x + b.w / 2, b.y + 25);
   ctx.textAlign = 'left';
@@ -327,7 +311,7 @@ window.addEventListener('mouseup', () => { mouse.down = false; });
 function makeField() {
   stars = [];
   for (let i = 0; i < 220; i++) {
-    stars.push({ x: rand(0, W), y: rand(0, H), layer: rand(0.2, 1), size: PX * (Math.random() < 0.8 ? 1 : 2), tint: Math.random() < 0.4 });
+    stars.push({ x: rand(0, W), y: rand(0, H), layer: rand(0.2, 1), size: rand(0.5, 2) });
   }
   nebulae = [];
   const colors = ['#3a1f6b', '#0f4c5c', '#5c1f4c'];
@@ -863,7 +847,7 @@ function updateIdle(dt) { titleTime += dt; driftField(dt, 40, 14); }
 // ---------- draw ----------
 function drawBackdrop() {
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#140a18'); g.addColorStop(1, '#1f0e22');
+  g.addColorStop(0, '#07070f'); g.addColorStop(1, '#0c0c1a');
   ctx.fillStyle = g;
   ctx.fillRect(-40, -40, W + 80, H + 80);
   nebulae.forEach(n => {
@@ -873,13 +857,12 @@ function drawBackdrop() {
     ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fill();
   });
   stars.forEach(s => {
-    const a = 0.35 + s.layer * 0.6;
-    ctx.fillStyle = s.tint ? `rgba(206,84,226,${a})` : `rgba(255,255,255,${a})`;
-    ctx.fillRect(Math.floor(s.x / PX) * PX, Math.floor(s.y / PX) * PX, s.size, s.size);
+    ctx.fillStyle = `rgba(255,255,255,${0.4 + s.layer * 0.6})`;
+    ctx.fillRect(s.x, s.y, s.size, s.size);
   });
 }
 
-const BLOCK_COLOR = { armour: '#5a4fe0', gun: '#e0444f', core: '#f4f2ff' };
+const BLOCK_COLOR = { armour: '#8b7dff', gun: '#ff6b9f', core: '#9ff7ff' };
 
 function roundRect(x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -978,8 +961,10 @@ function drawCoreFace(s, h, hurt, sealed) {
   }
   ctx.restore();
 
+  glowOn('#9ff7ff', sealed ? 6 : 16 + pulse * 16);
   ctx.fillStyle = sealed ? '#3d6f7d' : `rgb(${170 + Math.round(pulse * 70)},255,255)`;
   ctx.beginPath(); ctx.arc(0, 0, h * 0.36 * (1 - hurt * 0.3), 0, Math.PI * 2); ctx.fill();
+  glowOff();
 }
 
 function drawBoss() {
@@ -1005,7 +990,9 @@ function drawBoss() {
     } else if (b.kind === 'core') {
       drawCoreFace(s, h, hurt, sealed);
     } else {
+      glowOn(base, 8);
       drawPlate(s, h, base, hurt);
+      glowOff();
       if (b.kind === 'gun') drawGunFace(b, h, base);
       if (hurt > 0.12) drawCracks(b, h, hurt);
     }
@@ -1029,50 +1016,39 @@ function drawBoss() {
   ctx.restore();
 }
 
-// ---------- pixel icons ----------
-// Currency icons are tiny bitmaps drawn cell by cell, so they stay crisp at any
-// size. '#' is the body colour, '+' the highlight.
-const ICONS = {
-  diamond: ['...#...', '..#+#..', '.#+###.', '#+#####', '.#####.', '..###..', '...#...'],
-  circle:  ['..###..', '.#+###.', '#+#####', '#######', '#######', '.#####.', '..###..'],
-};
-CUR.white.text = '#f4f2ff';
-CUR.red.text = '#ff5a66';
-CUR.blue.text = '#7d72ff';
+// ---------- icons and panels ----------
+CUR.white.text = '#eaf6ff';
+CUR.red.text = '#ff8fb8';
+CUR.blue.text = '#b0a6ff';
 
-function pixelIcon(x, y, cur, cell) {
-  const rows = ICONS[CUR[cur].shape];
-  const n = rows.length;
-  const x0 = Math.round((x - (n * cell) / 2) / cell) * cell;
-  const y0 = Math.round((y - (n * cell) / 2) / cell) * cell;
-  const body = CUR[cur].color, hi = shade(body, 0.3);
-  for (let r = 0; r < n; r++) {
-    for (let c = 0; c < n; c++) {
-      const ch = rows[r][c];
-      if (ch === '.') continue;
-      ctx.fillStyle = ch === '+' ? hi : body;
-      ctx.fillRect(x0 + c * cell, y0 + r * cell, cell, cell);
-    }
-  }
-}
-
-// Chamfered arcade panel, the same frame the HUD, hangar and cards all share.
-function panel(x, y, w, h, border, fill) {
-  const c = 8;
+// Currency icon: a glowing diamond or orb. `cell` keeps the old sizing scale.
+function currencyIcon(x, y, cur, cell) {
+  const r = cell * 3.2, c = CUR[cur];
+  ctx.save();
+  glowOn(c.color, r * 1.2);
+  ctx.fillStyle = c.color;
   ctx.beginPath();
-  ctx.moveTo(x + c, y); ctx.lineTo(x + w - c, y); ctx.lineTo(x + w, y + c);
-  ctx.lineTo(x + w, y + h - c); ctx.lineTo(x + w - c, y + h); ctx.lineTo(x + c, y + h);
-  ctx.lineTo(x, y + h - c); ctx.lineTo(x, y + c); ctx.closePath();
-  ctx.fillStyle = fill || 'rgba(26,32,38,0.92)';
+  if (c.shape === 'diamond') {
+    ctx.moveTo(x, y - r); ctx.lineTo(x + r * 0.72, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r * 0.72, y);
+    ctx.closePath();
+  } else {
+    ctx.arc(x, y, r * 0.82, 0, Math.PI * 2);
+  }
   ctx.fill();
-  ctx.strokeStyle = border || '#8fd0c6';
-  ctx.lineWidth = 3;
-  ctx.stroke();
+  glowOff();
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.beginPath(); ctx.arc(x - r * 0.2, y - r * 0.28, r * 0.18, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
-function scanlines() {
-  ctx.fillStyle = 'rgba(0,0,0,0.13)';
-  for (let y = 0; y < H; y += PX * 2) ctx.fillRect(0, y, W, PX);
+// Translucent rounded panel with a thin neon edge, shared by HUD and menus.
+function panel(x, y, w, h, border, fill) {
+  roundRect(x, y, w, h, 8);
+  ctx.fillStyle = fill || 'rgba(10,12,24,0.82)';
+  ctx.fill();
+  ctx.strokeStyle = border || 'rgba(127,216,255,0.45)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
 }
 
 // ---------- fight ----------
@@ -1081,17 +1057,17 @@ function drawWorld() {
   if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
   drawBackdrop();
 
+  // engine trail
   player.trail.forEach(p => {
     const a = 1 - p.age / p.life;
-    ctx.fillStyle = `rgba(255,170,90,${a * 0.6})`;
-    const s = 6 * a;
-    ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+    ctx.fillStyle = `rgba(120,200,255,${a * 0.5})`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 5 * a, 0, Math.PI * 2); ctx.fill();
   });
 
   if (pulseRing) {
     const a = 1 - pulseRing.age / pulseRing.life;
-    ctx.strokeStyle = `rgba(244,242,255,${a * 0.9})`;
-    ctx.lineWidth = 3 + a * 6;
+    ctx.strokeStyle = `rgba(159,247,255,${a * 0.9})`;
+    ctx.lineWidth = 3 + a * 5;
     ctx.beginPath(); ctx.arc(player.x, player.y, pulseRing.r, 0, Math.PI * 2); ctx.stroke();
   }
 
@@ -1100,70 +1076,57 @@ function drawWorld() {
   // beams: a thin telegraph while charging, a wide beam while firing
   beams.forEach(bm => {
     const ex = bm.x + Math.cos(bm.angle) * bm.len, ey = bm.y + Math.sin(bm.angle) * bm.len;
-    ctx.strokeStyle = bm.firing ? '#ff5a66' : 'rgba(255,90,102,0.45)';
-    ctx.lineWidth = bm.firing ? 15 : 3;
+    glowOn('#ff4d6d', bm.firing ? 24 : 8);
+    ctx.strokeStyle = bm.firing ? 'rgba(255,90,120,0.95)' : 'rgba(255,90,120,0.35)';
+    ctx.lineWidth = bm.firing ? 14 : 2;
     ctx.beginPath(); ctx.moveTo(bm.x, bm.y); ctx.lineTo(ex, ey); ctx.stroke();
-    if (bm.firing) {
-      ctx.strokeStyle = '#ffe3e6';
-      ctx.lineWidth = 5;
-      ctx.beginPath(); ctx.moveTo(bm.x, bm.y); ctx.lineTo(ex, ey); ctx.stroke();
-    }
+    glowOff();
   });
 
   particles.forEach(p => {
     ctx.globalAlpha = 1 - p.age / p.life;
     ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
   });
   ctx.globalAlpha = 1;
 
-  orbs.forEach(o => pixelIcon(o.x, o.y, o.cur, PX * 2));
+  orbs.forEach(o => currencyIcon(o.x, o.y, o.cur, 2));
 
   flak.forEach(f => {
+    glowOn(f.color, 12);
     ctx.fillStyle = f.color;
     ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 1.3 + 1, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff4f6';
-    ctx.fillRect(f.x - 2, f.y - 2, 4, 4);
   });
 
+  glowOn('#ffd166', 10);
   ctx.fillStyle = '#ffd166';
-  shots.forEach(s => ctx.fillRect(s.x - 4, s.y - 4, 8, 8));
+  shots.forEach(s => { ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill(); });
 
-  drones.forEach(d => {
-    ctx.fillStyle = '#4dd06a';
-    ctx.fillRect(d.x - 8, d.y - 8, 16, 16);
-    ctx.fillStyle = '#b6ffc6';
-    ctx.fillRect(d.x - 4, d.y - 4, 8, 8);
-  });
+  glowOn('#7cffb2', 10);
+  ctx.fillStyle = '#7cffb2';
+  drones.forEach(d => { ctx.beginPath(); ctx.arc(d.x, d.y, 7, 0, Math.PI * 2); ctx.fill(); });
 
-  // ship: hull, cockpit, and an engine flare that flickers while thrusting
+  // ship
+  const hitWhite = player.invuln > 0;
   ctx.save();
   ctx.translate(player.x, player.y);
   ctx.rotate(player.angle);
   const r = player.radius;
-  if (player.trail.length && Math.random() < 0.8) {
-    ctx.fillStyle = '#ffb347';
-    ctx.beginPath();
-    ctx.moveTo(-r * 0.45, -r * 0.3); ctx.lineTo(-r * rand(1.1, 1.5), 0); ctx.lineTo(-r * 0.45, r * 0.3);
-    ctx.fill();
-  }
-  ctx.fillStyle = player.invuln > 0 && Math.floor(elapsed * 20) % 2 ? '#ffffff' : '#7fd8ff';
+  glowOn(hitWhite ? '#ffffff' : '#7fd8ff', 18);
+  ctx.fillStyle = hitWhite ? '#ffffff' : '#7fd8ff';
   ctx.beginPath();
   ctx.moveTo(r, 0);
-  ctx.lineTo(-r * 0.8, r * 0.75);
+  ctx.lineTo(-r * 0.8, r * 0.7);
   ctx.lineTo(-r * 0.4, 0);
-  ctx.lineTo(-r * 0.8, -r * 0.75);
+  ctx.lineTo(-r * 0.8, -r * 0.7);
   ctx.closePath();
   ctx.fill();
-  ctx.fillStyle = '#2a4a7a';
-  ctx.beginPath();
-  ctx.moveTo(r * 0.55, 0); ctx.lineTo(-r * 0.1, r * 0.28); ctx.lineTo(-r * 0.1, -r * 0.28);
-  ctx.fill();
   ctx.restore();
+  glowOff();
 
   if (player.shield > 0) {
-    ctx.strokeStyle = `rgba(90,184,232,${0.3 + 0.5 * (player.shield / Math.max(1, S.maxShield))})`;
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(159,247,255,${0.25 + 0.4 * (player.shield / Math.max(1, S.maxShield))})`;
+    ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(player.x, player.y, player.radius + 8, 0, Math.PI * 2); ctx.stroke();
   }
 
@@ -1172,7 +1135,7 @@ function drawWorld() {
 
 function drawPopups() {
   ctx.textAlign = 'center';
-  ctx.font = px(12);
+  ctx.font = font(12);
   popups.forEach(p => {
     const a = 1 - p.age / p.life;
     const y = p.y - p.age * 45;
@@ -1187,22 +1150,24 @@ function drawPopups() {
 }
 
 function drawFight() {
-  pixelPass(drawWorld);
+  drawWorld();
   drawPopups();
   if (hitFlash > 0) {
     ctx.fillStyle = `rgba(255,60,60,${hitFlash * 0.3})`;
     ctx.fillRect(0, 0, W, H);
   }
-  scanlines();
   drawHUD();
   if (paused) drawPaused();
 }
 
 function bar(x, y, w, h, pct, color) {
-  ctx.fillStyle = '#0b0d12';
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
   ctx.fillRect(x, y, w, h);
   ctx.fillStyle = color;
-  ctx.fillRect(x + 3, y + 3, Math.round((w - 6) * clamp(pct, 0, 1)), h - 6);
+  ctx.fillRect(x, y, w * clamp(pct, 0, 1), h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
 }
 
 function drawHUD() {
@@ -1212,13 +1177,13 @@ function drawHUD() {
   let y = 30;
   const row = (label, pct, color, text) => {
     ctx.textAlign = 'left';
-    ctx.font = px(9);
+    ctx.font = font(9);
     ctx.fillStyle = '#cfe9e4';
     ctx.fillText(label, 28, y + 13);
     bar(100, y, 218, 20, pct, color);
     if (text) {
       ctx.textAlign = 'center';
-      ctx.font = px(8);
+      ctx.font = font(8);
       ctx.fillStyle = '#1a0d1e';
       ctx.fillText(text, 210, y + 15);
       ctx.fillStyle = '#ffffff';
@@ -1226,31 +1191,31 @@ function drawHUD() {
     }
     y += 28;
   };
-  row('HULL', player.hull / S.maxHull, '#4dd06a', `${Math.ceil(player.hull)} / ${S.maxHull}`);
-  if (S.maxShield > 0) row('SHLD', player.shield / S.maxShield, '#3f9fd8', `${Math.ceil(player.shield)} / ${S.maxShield}`);
-  row('PULSE', player.pulse / player.maxPulse, '#9a55d8', player.pulse >= player.maxPulse ? 'PRESS E' : null);
+  row('HULL', player.hull / S.maxHull, '#4dff88', `${Math.ceil(player.hull)} / ${S.maxHull}`);
+  if (S.maxShield > 0) row('SHLD', player.shield / S.maxShield, '#7fd8ff', `${Math.ceil(player.shield)} / ${S.maxShield}`);
+  row('PULSE', player.pulse / player.maxPulse, '#9ff7ff', player.pulse >= player.maxPulse ? 'PRESS E' : null);
 
   // fight panel, top right: which fight, how sealed, and this run's haul
   const pw = 262, x0 = W - pw - 14;
   panel(x0, 14, pw, 116);
   ctx.textAlign = 'center';
-  ctx.font = px(12);
+  ctx.font = font(12);
   ctx.fillStyle = boss.guardian ? '#ff5a66' : '#ffffff';
   ctx.fillText(levelName(boss.level) + (boss.firstClear ? '' : ' - REPLAY'), x0 + pw / 2, 42);
-  ctx.font = px(8);
+  ctx.font = font(8);
   ctx.fillStyle = boss.sealed ? '#9d95ff' : '#ffd166';
   ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}%` : 'CORE EXPOSED!', x0 + pw / 2, 64);
   CUR_ORDER.forEach((k, i) => {
     const cx = x0 + 26 + i * 80;
-    pixelIcon(cx, 96, k, 3);
+    currencyIcon(cx, 96, k, 3);
     ctx.textAlign = 'left';
-    ctx.font = px(9);
+    ctx.font = font(9);
     ctx.fillStyle = CUR[k].text;
     ctx.fillText(`+${runWallet[k]}`, cx + 15, 101);
   });
 
   ctx.textAlign = 'left';
-  ctx.font = px(7);
+  ctx.font = font(7);
   ctx.fillStyle = 'rgba(207,233,228,0.55)';
   ctx.fillText('WASD MOVE   MOUSE AIM   CLICK FIRE   E PULSE   P PAUSE   F FULLSCREEN', 18, H - 16);
 }
@@ -1261,9 +1226,9 @@ function drawPaused() {
   panel(W / 2 - 170, H / 2 - 60, 340, 110);
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
-  ctx.font = px(22);
+  ctx.font = font(22);
   ctx.fillText('PAUSED', W / 2, H / 2 - 6);
-  ctx.font = px(8);
+  ctx.font = font(8);
   ctx.fillStyle = '#9fd3cc';
   ctx.fillText('P OR ESC TO RESUME', W / 2, H / 2 + 28);
   ctx.textAlign = 'left';
@@ -1276,9 +1241,9 @@ function walletRow(cy, wallet, prefix, cell) {
   const left = W / 2 - (colW * CUR_ORDER.length) / 2;
   CUR_ORDER.forEach((k, i) => {
     const x = left + i * colW + 24;
-    pixelIcon(x, cy, k, cell);
+    currencyIcon(x, cy, k, cell);
     ctx.textAlign = 'left';
-    ctx.font = px(12);
+    ctx.font = font(12);
     ctx.fillStyle = CUR[k].text;
     ctx.fillText(`${prefix || ''}${wallet[k]}`, x + cell * 4 + 8, cy + 7);
   });
@@ -1329,12 +1294,12 @@ function costRow(cost, rightX, baseY, dim) {
   let rx = rightX;
   Object.keys(cost).sort((a, b) => CUR_ORDER.indexOf(b) - CUR_ORDER.indexOf(a)).forEach(k => {
     const txt = String(cost[k]);
-    ctx.font = px(8);
+    ctx.font = font(8);
     ctx.textAlign = 'right';
     ctx.fillStyle = !dim && save.wallet[k] >= cost[k] ? CUR[k].text : '#5d6470';
     ctx.fillText(txt, rx, baseY);
     rx -= ctx.measureText(txt).width + 13;
-    pixelIcon(rx + 4, baseY - 4, k, 2);
+    currencyIcon(rx + 4, baseY - 4, k, 2);
     rx -= 12;
   });
 }
@@ -1348,21 +1313,21 @@ function drawTooltip(n) {
   panel(x, y, w, h, st.border, 'rgba(18,22,28,0.97)');
 
   ctx.textAlign = 'left';
-  ctx.font = px(10);
+  ctx.font = font(10);
   ctx.fillStyle = '#ffffff';
   ctx.fillText(n.up.name.toUpperCase(), x + 16, y + 28);
   ctx.textAlign = 'right';
-  ctx.font = px(8);
+  ctx.font = font(8);
   ctx.fillStyle = '#9fd3cc';
   ctx.fillText(`LV ${n.level}/${n.up.max}`, x + w - 16, y + 28);
 
   ctx.textAlign = 'left';
-  ctx.font = px(7);
+  ctx.font = font(7);
   ctx.fillStyle = '#cfe9e4';
   const next = n.maxed ? n.level : n.level + 1;
   ctx.fillText((n.maxed ? 'NOW: ' : 'NEXT: ') + n.up.desc(next).toUpperCase(), x + 16, y + 56);
 
-  ctx.font = px(8);
+  ctx.font = font(8);
   if (!n.unlocked) {
     ctx.fillStyle = '#ff5a66';
     ctx.fillText(`LOCKED - NEEDS ${UP_BY_ID[n.up.parent].name.toUpperCase()}`, x + 16, y + 100);
@@ -1377,10 +1342,9 @@ function drawTooltip(n) {
 }
 
 function drawHangar() {
-  pixelPass(drawBackdrop);
-  ctx.fillStyle = 'rgba(12,6,16,0.5)';
+  drawBackdrop();
+  ctx.fillStyle = 'rgba(5,5,12,0.5)';
   ctx.fillRect(0, 0, W, H);
-  scanlines();
 
   const { nodes, fight, cx, cy } = hangarLayout();
   const byId = Object.fromEntries(nodes.map(n => [n.up.id, n]));
@@ -1399,9 +1363,9 @@ function drawHangar() {
   panel(fight.x, fight.y, fight.w, fight.h, '#7cf29a', '#2e8a45');
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffffff';
-  ctx.font = px(14);
+  ctx.font = font(14);
   ctx.fillText('FIGHT', cx, cy + 2);
-  ctx.font = px(7);
+  ctx.font = font(7);
   ctx.fillStyle = '#c9ffd6';
   ctx.fillText(levelName(save.selected), cx, cy + 20);
   drawLevelPicker(fight, cx);
@@ -1418,7 +1382,7 @@ function drawHangar() {
     }
     panel(n.x - s / 2, n.y - s / 2, s, s, n === hover ? '#ffffff' : st.border, st.fill);
     ctx.textAlign = 'center';
-    ctx.font = px(n.up.code.length > 3 ? 7 : 8);
+    ctx.font = font(n.up.code.length > 3 ? 7 : 8);
     ctx.fillStyle = st.text;
     ctx.fillText(n.up.code, n.x, n.y + 4);
 
@@ -1433,47 +1397,47 @@ function drawHangar() {
   // top bar: resources, title, player stats
   panel(14, 14, 330, 66);
   ctx.textAlign = 'left';
-  ctx.font = px(7);
+  ctx.font = font(7);
   ctx.fillStyle = '#9fd3cc';
   ctx.fillText('RESOURCES', 28, 34);
   CUR_ORDER.forEach((k, i) => {
     const x = 36 + i * 104;
-    pixelIcon(x, 56, k, 3);
-    ctx.font = px(10);
+    currencyIcon(x, 56, k, 3);
+    ctx.font = font(10);
     ctx.textAlign = 'left';
     ctx.fillStyle = CUR[k].text;
     ctx.fillText(String(save.wallet[k]), x + 16, 62);
   });
 
   ctx.textAlign = 'center';
-  ctx.font = px(22);
-  ctx.fillStyle = '#e0444f';
-  ctx.fillText('HANGAR', W / 2 + 3, 49);
-  ctx.fillStyle = '#ffffff';
+  ctx.font = font(22);
+  glowOn('#7fd8ff', 22);
+  ctx.fillStyle = '#eaf6ff';
   ctx.fillText('HANGAR', W / 2, 46);
-  ctx.font = px(7);
+  glowOff();
+  ctx.font = font(7);
   ctx.fillStyle = '#9fd3cc';
   ctx.fillText(`BEST LEVEL ${save.bestLevel}`, W / 2, 70);
 
   const sx = W - 14 - 330;
   panel(sx, 14, 330, 66);
   ctx.textAlign = 'left';
-  ctx.font = px(7);
+  ctx.font = font(7);
   ctx.fillStyle = '#9fd3cc';
   ctx.fillText('PLAYER STATS', sx + 14, 34);
-  ctx.font = px(9);
+  ctx.font = font(9);
   [['DMG', S.damage, '#ff5a66'], ['HULL', S.maxHull, '#4dd06a'], ['SHLD', S.maxShield, '#3f9fd8']].forEach(([label, v, col], i) => {
     const x = sx + 14 + i * 106;
     ctx.fillStyle = '#8a93a0';
-    ctx.font = px(7);
+    ctx.font = font(7);
     ctx.fillText(label, x, 60);
     ctx.fillStyle = col;
-    ctx.font = px(10);
+    ctx.font = font(10);
     ctx.fillText(String(v), x + ctx.measureText(label).width + 12, 62);
   });
 
   ctx.textAlign = 'center';
-  ctx.font = px(7);
+  ctx.font = font(7);
   ctx.fillStyle = 'rgba(207,233,228,0.5)';
   ctx.fillText('GREEN = AFFORDABLE  -  CLICK TO BUY  -  ARROWS PICK LEVEL  -  ENTER FIGHTS  -  R RESETS SAVE',
                W / 2, H - 14);
@@ -1504,13 +1468,11 @@ function centreText(lines, topY) {
   ctx.textAlign = 'center';
   let y = topY;
   lines.forEach(l => {
-    ctx.font = l.font || px(10);
-    if (l.drop) {
-      ctx.fillStyle = l.drop;
-      ctx.fillText(l.text, W / 2 + 4, y + 4);
-    }
-    ctx.fillStyle = l.color || '#f4f2ff';
+    ctx.font = l.font || font(10);
+    if (l.glow) glowOn(l.glow, 24);
+    ctx.fillStyle = l.color || '#eaf6ff';
     ctx.fillText(l.text, W / 2, y);
+    glowOff();
     y += l.gap || 26;
   });
   ctx.textAlign = 'left';
@@ -1518,26 +1480,25 @@ function centreText(lines, topY) {
 }
 
 function drawTitle() {
-  pixelPass(drawBackdrop);
-  ctx.fillStyle = 'rgba(12,6,16,0.45)';
+  drawBackdrop();
+  ctx.fillStyle = 'rgba(5,5,12,0.55)';
   ctx.fillRect(0, 0, W, H);
-  scanlines();
   const cy = H / 2;
   let y = centreText([
-    { text: 'VOID SALVAGE', font: px(40), drop: '#e0444f', gap: 60 },
+    { text: 'VOID SALVAGE', font: font(40), glow: '#7fd8ff', gap: 60 },
     { text: 'ONE SHIP AGAINST BOSSES BUILT FROM BLOCKS', color: '#cfe9e4', gap: 24 },
     { text: 'SHRED THE ARMOUR. EXPOSE THE CORE. BLOW IT.', color: '#cfe9e4', gap: 44 },
   ], cy - 110);
   if (save.bestLevel > 1 || CUR_ORDER.some(k => save.wallet[k] > 0)) {
     walletRow(y, save.wallet, '', 4);
     y += 44;
-    y = centreText([{ text: `BEST LEVEL ${save.bestLevel}`, color: '#9fd3cc', font: px(8), gap: 40 }], y);
+    y = centreText([{ text: `BEST LEVEL ${save.bestLevel}`, color: '#9fd3cc', font: font(8), gap: 40 }], y);
   } else {
-    y = centreText([{ text: 'WASD MOVE - MOUSE AIM - CLICK FIRE - E PULSE', color: '#9fd3cc', font: px(8), gap: 40 }], y);
+    y = centreText([{ text: 'WASD MOVE - MOUSE AIM - CLICK FIRE - E PULSE', color: '#9fd3cc', font: font(8), gap: 40 }], y);
   }
   // hard on/off blink, like an attract-mode INSERT COIN
   if (Math.floor(titleTime * 2) % 2 === 0) {
-    centreText([{ text: 'PRESS ANY KEY', color: '#ffd84a', font: px(14) }], y + 10);
+    centreText([{ text: 'PRESS ANY KEY', color: '#ffd84a', font: font(14) }], y + 10);
   }
   drawFsButton();
 }
@@ -1555,7 +1516,7 @@ function drawLevelPicker(fight, cx) {
     panel(r.x, r.y, r.w, r.h, hot ? '#ffffff' : (enabled ? '#7cf29a' : '#2a3038'),
           enabled ? 'rgba(22,72,36,0.96)' : 'rgba(12,14,18,0.96)');
     ctx.textAlign = 'center';
-    ctx.font = px(10);
+    ctx.font = font(10);
     ctx.fillStyle = enabled ? '#ffffff' : '#3a424c';
     ctx.fillText(glyph, r.x + r.w / 2 + 1, r.y + r.h / 2 + 5);
   };
@@ -1565,9 +1526,9 @@ function drawLevelPicker(fight, cx) {
   // what this fight pays, above the button
   const first = save.selected === save.level;
   const tag = first ? 'NEW - FIRST CLEAR PAYS WHITE' : 'REPLAY - RED + BLUE ONLY';
-  ctx.font = px(7);
+  ctx.font = font(7);
   const tw = ctx.measureText(tag).width;
-  ctx.fillStyle = 'rgba(12,6,16,0.9)';
+  ctx.fillStyle = 'rgba(5,5,12,0.9)';
   ctx.fillRect(cx - tw / 2 - 6, fight.y - 22, tw + 12, 16);
   ctx.textAlign = 'center';
   ctx.fillStyle = first ? '#ffd84a' : '#8a93a0';
@@ -1597,13 +1558,12 @@ function endButtons() {
 }
 
 function drawEndScreen(title, titleColor, subtitle, subtitleColor) {
-  pixelPass(drawFightBackdropStill);
-  scanlines();
+  drawFightBackdropStill();
   const cy = H / 2;
   panel(W / 2 - 310, cy - 130, 620, 280);
   let y = centreText([
-    { text: title, font: px(26), color: titleColor, drop: '#1a0d1e', gap: 44 },
-    { text: subtitle, color: subtitleColor || '#cfe9e4', font: px(9), gap: 42 },
+    { text: title, font: font(26), color: titleColor, glow: titleColor, gap: 44 },
+    { text: subtitle, color: subtitleColor || '#cfe9e4', font: font(9), gap: 42 },
   ], cy - 70);
   walletRow(y, runWallet, '+', 4);
 
@@ -1612,12 +1572,12 @@ function drawEndScreen(title, titleColor, subtitle, subtitleColor) {
     const hot = inRect(b, mouse.x, mouse.y);
     panel(b.x, b.y, b.w, b.h, hot ? '#ffffff' : b.border, b.fill);
     ctx.textAlign = 'center';
-    ctx.font = px(10);
+    ctx.font = font(10);
     ctx.fillStyle = '#ffffff';
     ctx.fillText(b.label, b.x + b.w / 2, b.y + 31);
   });
   const hint = bs.map((b, i) => `${i === 0 ? 'ENTER' : b.key.toUpperCase()} ${b.label}`).join('   -   ');
-  centreText([{ text: hint, color: 'rgba(207,233,228,0.5)', font: px(7) }], cy + 132);
+  centreText([{ text: hint, color: 'rgba(207,233,228,0.5)', font: font(7) }], cy + 132);
   drawFsButton();
 }
 
@@ -1644,7 +1604,7 @@ function drawFightBackdropStill() {
     ctx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
   });
   ctx.globalAlpha = 1;
-  ctx.fillStyle = 'rgba(8,4,12,0.6)';
+  ctx.fillStyle = 'rgba(4,4,10,0.62)';
   ctx.fillRect(0, 0, W, H);
 }
 
