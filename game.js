@@ -241,6 +241,7 @@ computeStats();
 let mode = 'title';           // title | hangar | fight | cleared | dead
 let player, boss, shots, flak, orbs, particles, drones, stars, nebulae, beams;
 let rockets = [];
+let victory = null, debris = [];
 let runWallet = emptyWallet(), popups = [];
 let elapsed, shake, hitFlash, paused, fireTimer, pulseRing, titleTime;
 
@@ -500,6 +501,7 @@ function startFight(level) {
   boss = makeBoss(L);
   boss.firstClear = L === save.level;
   shots = []; flak = []; orbs = []; particles = []; beams = []; rockets = [];
+  victory = null; debris = [];
   drones = [];
   for (let i = 0; i < S.drones; i++) drones.push({ phase: (Math.PI * 2 * i) / S.drones, timer: rand(0, 0.5), x: 0, y: 0 });
   runWallet = emptyWallet();
@@ -546,6 +548,7 @@ function breakBlock(b) {
   const w = blockWorld(b);
   const isCore = b.kind === 'core';
   spawnParticles(w.x, w.y, BLOCK_COLOR[b.kind], isCore ? 60 : 14, isCore ? 340 : 130);
+  spawnDebris(w, b);
   shake = Math.max(shake, isCore ? 30 : 5);
 
   // Every block pays out, in its own colour.
@@ -557,7 +560,7 @@ function breakBlock(b) {
   });
 
   if (isCore) {
-    clearFight();
+    beginVictory();
     return;
   }
   boss.armourLeft--;
@@ -599,17 +602,62 @@ function splashDamage(x, y, radius, dmg) {
 
 function bankRun() { CUR_ORDER.forEach(k => { save.wallet[k] += runWallet[k]; }); }
 
-function clearFight() {
-  // Killing the core ends the fight instantly, so anything still drifting --
-  // including the core's own payout -- would be unreachable. The wreck is
-  // salvaged for you. (Dying does not: uncollected orbs are the risk.)
+// ---------- victory ----------
+// When the core blows the fight does not just cut to a menu. Time slows for a
+// beat, shockwaves roll out from the core, and the rest of the boss comes apart
+// block by block in a wave running outward from where the core was. Every
+// drop -- including anything already floating around -- streams into the
+// ship, and the win panel only appears once it has all arrived.
+function beginVictory() {
+  const c = blockWorld(boss.core);
+  victory = { t: 0, x: c.x, y: c.y };
+  // enemy fire fizzles out: nothing can hurt you now
+  flak.forEach(f => spawnParticles(f.x, f.y, f.color, 3, 60));
+  flak = [];
+  beams = [];
+  const cl = blockLocal(boss.core);
+  boss.blocks.forEach(b => {
+    if (!b.alive || b.kind === 'core') return;
+    const l = blockLocal(b);
+    b.dieAt = 0.22 + (Math.hypot(l.x - cl.x, l.y - cl.y) / boss.cell) * 0.1 + Math.random() * 0.05;
+  });
+  shake = Math.max(shake, 34);
+  spawnParticles(c.x, c.y, '#ffffff', 40, 420);
+}
+
+function victoryTick(dt) {
+  victory.t += dt;
+  boss.blocks.forEach(b => {
+    if (b.alive && b.dieAt !== undefined && victory.t >= b.dieAt) breakBlock(b);
+  });
+  const standing = boss.blocks.some(b => b.alive);
+  if ((!standing && orbs.length === 0 && victory.t > 1.6) || victory.t > 8) finishVictory();
+}
+
+function spawnDebris(w, b) {
+  const n = victory ? 7 : 4;
+  const out = Math.atan2(w.y - boss.y, w.x - boss.x);
+  for (let i = 0; i < n; i++) {
+    const a = out + rand(-1.1, 1.1), sp = rand(90, victory ? 380 : 240);
+    debris.push({
+      x: w.x + rand(-6, 6), y: w.y + rand(-6, 6), vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      rot: rand(0, Math.PI * 2), vr: rand(-9, 9), size: boss.cell * rand(0.16, 0.34),
+      color: i % 3 === 0 ? shade(BLOCK_COLOR[b.kind], 0.25) : BLOCK_COLOR[b.kind],
+      age: 0, life: rand(0.7, 1.3),
+    });
+  }
+}
+
+function finishVictory() {
+  // anything that has not reached the ship yet is banked anyway
   orbs.forEach(o => { runWallet[o.cur] += o.value; });
   orbs = [];
-  // Blocks still standing when the core blows are salvaged at full value too.
   boss.blocks.forEach(b => {
     if (!b.alive || b.kind === 'core') return;
     blockPayout(b).forEach(p => { runWallet[p.cur] += p.n * p.value; });
+    b.alive = false;
   });
+  victory = null;
   bankRun();
   save.clears++;
   if (boss.firstClear) {
@@ -792,6 +840,7 @@ function driftField(dt, vx, vy) {
 }
 
 function hurtPlayer(amount) {
+  if (victory) return;
   if (player.invuln > 0) return;
   player.invuln = S.iframes;
   player.shieldTimer = S.shieldDelay;
@@ -808,6 +857,8 @@ function hurtPlayer(amount) {
 }
 
 function update(dt) {
+  // the first moment after the core blows plays in slow motion
+  if (victory && victory.t < 0.3) dt *= 0.35;
   elapsed += dt;
   beams = [];
 
@@ -871,15 +922,21 @@ function update(dt) {
   let midY = Math.max(H * 0.34, ext + 16 + H * 0.12);
   let swayY = H * 0.12;
   if (midY > H * 0.5) { midY = H * 0.5; swayY = Math.max(0, midY - ext - 16); }
-  boss.x = W / 2 + Math.sin(boss.t * 0.33) * swayX;
-  boss.y = midY + Math.sin(boss.t * 0.51) * swayY;
-  boss.angle += boss.spin * dt;
-  boss.sealed = !coreExposed();
+  if (!victory) {
+    boss.x = W / 2 + Math.sin(boss.t * 0.33) * swayX;
+    boss.y = midY + Math.sin(boss.t * 0.51) * swayY;
+  }
+  boss.angle += boss.spin * dt * (victory ? 0.25 : 1);
+  if (boss.core.alive) boss.sealed = !coreExposed();
   boss.blocks.forEach(b => {
     if (!b.alive) return;
     if (b.flash > 0) b.flash -= dt;
-    if (b.gun) runGun(b, dt);
+    if (b.gun && !victory) runGun(b, dt);
   });
+  if (victory) {
+    victoryTick(dt);
+    if (mode !== 'fight') return;
+  }
 
   // --- drones ---
   drones.forEach(d => {
@@ -952,7 +1009,7 @@ function update(dt) {
   });
 
   // --- ramming the hull ---
-  if (player.invuln <= 0 && blockAtWorld(player.x, player.y)) {
+  if (!victory && player.invuln <= 0 && blockAtWorld(player.x, player.y)) {
     const a = Math.atan2(player.y - boss.y, player.x - boss.x);
     player.vx = Math.cos(a) * 460; player.vy = Math.sin(a) * 460;
     hurtPlayer(16);
@@ -961,15 +1018,24 @@ function update(dt) {
   // --- salvage ---
   orbs.forEach(o => {
     const d = dist(o.x, o.y, player.x, player.y);
-    if (d < S.magnet) {
+    if (victory) {
+      // after a brief spray outward, every drop homes in on the ship, faster and faster
+      o.age = (o.age || 0) + dt;
+      if (o.age > 0.2) {
+        const a = Math.atan2(player.y - o.y, player.x - o.x), spd = Math.min(1500, 280 + o.age * 1100);
+        const k = Math.min(1, 9 * dt);
+        o.vx += (Math.cos(a) * spd - o.vx) * k;
+        o.vy += (Math.sin(a) * spd - o.vy) * k;
+      }
+    } else if (d < S.magnet) {
       const a = Math.atan2(player.y - o.y, player.x - o.x);
       o.vx = Math.cos(a) * 300; o.vy = Math.sin(a) * 300;
     }
     o.x += o.vx * dt; o.y += o.vy * dt;
-    o.vx -= o.vx * 1.5 * dt; o.vy -= o.vy * 1.5 * dt;
+    if (!victory) { o.vx -= o.vx * 1.5 * dt; o.vy -= o.vy * 1.5 * dt; }
   });
   orbs = orbs.filter(o => {
-    if (dist(o.x, o.y, player.x, player.y) < 20) {
+    if (dist(o.x, o.y, player.x, player.y) < 20 + Math.hypot(o.vx, o.vy) * dt) {
       runWallet[o.cur] += o.value;
       player.pulse = Math.min(player.maxPulse, player.pulse + 6 * S.pulseRate);
       return false;
@@ -983,6 +1049,11 @@ function update(dt) {
     p.vx -= p.vx * 3 * dt; p.vy -= p.vy * 3 * dt;
   });
   particles = particles.filter(p => p.age < p.life);
+  debris.forEach(d => {
+    d.age += dt; d.x += d.vx * dt; d.y += d.vy * dt; d.rot += d.vr * dt;
+    d.vx -= d.vx * 1.6 * dt; d.vy -= d.vy * 1.6 * dt;
+  });
+  debris = debris.filter(d => d.age < d.life);
   popups.forEach(p => { p.age += dt; });
   popups = popups.filter(p => p.age < p.life);
   driftField(dt, player.vx, player.vy);
@@ -1454,6 +1525,7 @@ function drawWorld() {
   }
 
   drawBoss();
+  if (victory) drawVictoryRings();
 
   // beams: a thin telegraph while charging, a wide beam while firing
   beams.forEach(bm => {
@@ -1469,6 +1541,15 @@ function drawWorld() {
     ctx.globalAlpha = 1 - p.age / p.life;
     ctx.fillStyle = p.color;
     ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+  });
+  debris.forEach(d => {
+    ctx.save();
+    ctx.translate(d.x, d.y);
+    ctx.rotate(d.rot);
+    ctx.globalAlpha = Math.max(0, 1 - d.age / d.life);
+    ctx.fillStyle = d.color;
+    ctx.fillRect(-d.size / 2, -d.size * 0.35, d.size, d.size * 0.7);
+    ctx.restore();
   });
   ctx.globalAlpha = 1;
 
@@ -1512,9 +1593,44 @@ function drawPopups() {
   ctx.textAlign = 'left';
 }
 
+function drawVictoryRings() {
+  [0, 0.12, 0.26].forEach((delay, i) => {
+    const tt = victory.t - delay;
+    if (tt <= 0 || tt > 0.9) return;
+    const k = tt / 0.9, r = (1 - Math.pow(1 - k, 3)) * Math.max(W, H) * 0.55;
+    glowOn('#9ff7ff', 20);
+    ctx.strokeStyle = i === 0 ? `rgba(255,255,255,${1 - k})` : `rgba(159,247,255,${(1 - k) * 0.8})`;
+    ctx.lineWidth = (i === 0 ? 10 : 5) * (1 - k) + 1;
+    ctx.beginPath(); ctx.arc(victory.x, victory.y, r, 0, Math.PI * 2); ctx.stroke();
+    glowOff();
+  });
+}
+
+function drawVictoryOverlay() {
+  if (victory.t < 0.3) {
+    ctx.fillStyle = `rgba(255,255,255,${(0.3 - victory.t) * 1.8})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+  const a = clamp((victory.t - 0.15) * 3, 0, 1);
+  ctx.globalAlpha = a;
+  ctx.textAlign = 'center';
+  glowOn('#ffd84a', 26);
+  ctx.fillStyle = '#ffd84a';
+  ctx.font = font(26);
+  ctx.fillText('CORE DESTROYED', W / 2, H * 0.22);
+  glowOff();
+  ctx.font = font(9);
+  ctx.fillStyle = '#cfe9e4';
+  const salvaging = orbs.length > 0 || boss.blocks.some(b => b.alive);
+  ctx.fillText(salvaging ? 'SALVAGING THE WRECK...' : 'ALL SALVAGE RECOVERED', W / 2, H * 0.22 + 34);
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+}
+
 function drawFight() {
   drawWorld();
   drawPopups();
+  if (victory) drawVictoryOverlay();
   if (hitFlash > 0) {
     ctx.fillStyle = `rgba(255,60,60,${hitFlash * 0.3})`;
     ctx.fillRect(0, 0, W, H);
@@ -1580,7 +1696,7 @@ function drawHUD() {
   ctx.fillText(levelName(boss.level) + (boss.firstClear ? '' : ' - REPLAY'), x0 + pw / 2, 42);
   ctx.font = font(8);
   ctx.fillStyle = boss.sealed ? '#7fb2ff' : '#9ff7ff';
-  ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}% - CORE SHIELDED` : 'CORE EXPOSED - HIT IT!', x0 + pw / 2, 64);
+  ctx.fillText(victory ? 'CORE DESTROYED' : boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}% - CORE SHIELDED` : 'CORE EXPOSED - HIT IT!', x0 + pw / 2, 64);
   CUR_ORDER.forEach((k, i) => {
     const cx = x0 + 26 + i * 80;
     currencyIcon(cx, 96, k, 3);
@@ -1793,7 +1909,7 @@ function drawHangar() {
   glowOff();
   ctx.font = font(7);
   ctx.fillStyle = '#9fd3cc';
-  ctx.fillText(`BEST LEVEL ${save.bestLevel}`, W / 2, 70);
+  drawMapButton();
 
   const sx = W - 14 - 330;
   panel(sx, 14, 330, 66);
@@ -1824,6 +1940,7 @@ function drawHangar() {
 }
 
 function hangarClick(mx, my) {
+  if (inRect(mapButton(), mx, my)) { mode = 'levels'; levelsScroll = null; return; }
   const { nodes, fight } = hangarLayout();
   if (inRect(fight.prev, mx, my)) { pickLevel(-1); return; }
   if (inRect(fight.next, mx, my)) { pickLevel(1); return; }
@@ -1837,6 +1954,215 @@ function hangarClick(mx, my) {
   save.upgrades[n.up.id] = n.level + 1;
   computeStats();
   writeSave();
+}
+
+// ---------- level map ----------
+// Levels come in sectors of five, the fifth of each a Guardian. Every level
+// builds the same boss every time, so the map can show each one's actual
+// shape, guns and rewards before you fight it.
+let levelsScroll = null;          // first sector row shown; null = centre on the frontier
+const previewCache = {};
+
+function levelPreview(L) {
+  const key = `${L}:${S.yield.red}:${S.yield.blue}:${S.whiteBonus}`;
+  if (!previewCache[key]) {
+    const b = makeBoss(L);
+    const guns = {};
+    b.blocks.forEach(x => { if (x.gun) guns[x.gun.type] = (guns[x.gun.type] || 0) + 1; });
+    // blockPayout reads the live boss, so borrow the slot for the estimate
+    const saved = boss;
+    boss = b;
+    b.firstClear = false;
+    let red = 0, blue = 0;
+    b.blocks.forEach(x => blockPayout(x).forEach(p => {
+      if (p.cur === 'red') red += p.n * p.value;
+      if (p.cur === 'blue') blue += p.n * p.value;
+    }));
+    b.firstClear = true;
+    const white = blockPayout(b.core).filter(p => p.cur === 'white').reduce((t, p) => t + p.n * p.value, 0);
+    boss = saved;
+    previewCache[key] = {
+      cols: b.cols, rows: b.rows, guardian: b.guardian, guns, red, blue, white,
+      blocks: b.blocks.map(x => ({ r: x.r, c: x.c, kind: x.kind })), coreHp: b.core.maxHp, count: b.blocks.length,
+    };
+  }
+  return previewCache[key];
+}
+
+function levelState(L) { return L < save.level ? 'beaten' : L === save.level ? 'next' : 'locked'; }
+
+function levelsLayout() {
+  const panelW = 330, pad = 24, gap = 14, labelH = 24, top = 112, rowsShown = 4;
+  const areaW = W - panelW - pad * 3;
+  const tile = Math.max(70, Math.floor(Math.min((areaW - 4 * gap) / 5, (H - top - 90 - rowsShown * (gap + labelH)) / rowsShown)));
+  const frontierSector = Math.floor((save.level - 1) / 5);
+  const maxSector = frontierSector + 1;   // one sector of locked levels is shown ahead
+  if (levelsScroll === null) levelsScroll = Math.max(0, frontierSector - 2);
+  levelsScroll = clamp(levelsScroll, 0, Math.max(0, maxSector - rowsShown + 1));
+  const tiles = [];
+  for (let row = 0; row < rowsShown; row++) {
+    const sector = levelsScroll + row;
+    if (sector > maxSector) break;
+    for (let i = 0; i < 5; i++) {
+      tiles.push({ L: sector * 5 + i + 1, sector, x: pad + i * (tile + gap), y: top + row * (tile + gap + labelH) + labelH, w: tile, h: tile });
+    }
+  }
+  const info = { x: W - panelW - pad, y: top, w: panelW, h: H - top - 90 };
+  return {
+    tiles, info, tile, maxSector, rowsShown,
+    back: { x: pad, y: H - 64, w: 170, h: 44 },
+    fight: { x: info.x + 20, y: info.y + info.h - 64, w: info.w - 40, h: 46 },
+  };
+}
+
+function drawMiniBoss(p, cx, cy, maxW, maxH, locked, dim) {
+  const m = Math.max(2, Math.floor(Math.min(maxW / p.cols, maxH / p.rows)));
+  const ox = cx - (p.cols * m) / 2, oy = cy - (p.rows * m) / 2;
+  p.blocks.forEach(b => {
+    ctx.fillStyle = locked ? '#252c38' : BLOCK_COLOR[b.kind];
+    ctx.globalAlpha = dim ? 0.55 : 1;
+    ctx.fillRect(ox + b.c * m + 0.5, oy + b.r * m + 0.5, m - 1, m - 1);
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawLevels() {
+  drawBackdrop();
+  ctx.fillStyle = 'rgba(5,5,12,0.55)';
+  ctx.fillRect(0, 0, W, H);
+  const lay = levelsLayout();
+  const hover = lay.tiles.find(t => inRect(t, mouse.x, mouse.y));
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 200);
+
+  // header
+  ctx.textAlign = 'center';
+  glowOn('#7fd8ff', 22);
+  ctx.fillStyle = '#eaf6ff';
+  ctx.font = font(22);
+  ctx.fillText('LEVEL MAP', W / 2, 48);
+  glowOff();
+  ctx.font = font(8);
+  ctx.fillStyle = '#9fd3cc';
+  const beaten = save.level - 1, guards = Math.floor(beaten / 5);
+  ctx.fillText(`CLEARED ${beaten} LEVEL${beaten === 1 ? '' : 'S'}   -   GUARDIANS BEATEN ${guards}   -   NEXT UP: ${levelName(save.level)}${save.level % 5 ? '' : ' (LV ' + save.level + ')'}`, W / 2, 76);
+  if (lay.maxSector + 1 > lay.rowsShown) {
+    ctx.fillStyle = 'rgba(207,233,228,0.45)';
+    ctx.fillText('SCROLL OR UP/DOWN FOR MORE SECTORS', W / 2, 96);
+  }
+
+  // sector rows and tiles
+  const seenSector = new Set();
+  lay.tiles.forEach(t => {
+    if (!seenSector.has(t.sector)) {
+      seenSector.add(t.sector);
+      ctx.textAlign = 'left';
+      ctx.font = font(8);
+      ctx.fillStyle = t.sector <= Math.floor((save.level - 1) / 5) ? '#9fd3cc' : '#4a5462';
+      ctx.fillText(`SECTOR ${t.sector + 1}`, t.x, t.y - 8);
+    }
+    const st = levelState(t.L), p = levelPreview(t.L);
+    const selected = t.L === save.selected && st !== 'locked';
+    let border = st === 'beaten' ? '#ffd84a' : st === 'next' ? `rgba(127,233,255,${0.5 + pulse * 0.5})` : '#2a3038';
+    if (selected) border = '#ffffff';
+    if (t === hover && st !== 'locked') border = '#ffffff';
+    panel(t.x, t.y, t.w, t.h, border, st === 'locked' ? 'rgba(10,12,18,0.9)' : 'rgba(12,16,28,0.9)');
+    if (selected) { ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2; ctx.strokeRect(t.x - 4, t.y - 4, t.w + 8, t.h + 8); }
+    drawMiniBoss(p, t.x + t.w / 2, t.y + t.h / 2 - 8, t.w - 22, t.h - 42, st === 'locked', st === 'beaten');
+
+    ctx.font = font(7);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = p.guardian ? '#ff7a7a' : (st === 'locked' ? '#4a5462' : '#eaf6ff');
+    ctx.fillText(p.guardian ? `GUARD ${t.L / 5}` : `LV ${t.L}`, t.x + 8, t.y + t.h - 9);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = st === 'beaten' ? '#ffd84a' : st === 'next' ? '#7fe9ff' : '#4a5462';
+    const narrow = t.w < 140;   // short marks when the tile is too small for words
+    ctx.fillText(st === 'beaten' ? (narrow ? String.fromCharCode(10003) : 'CLEARED') : st === 'next' ? 'NEXT' : (narrow ? '-' : 'LOCKED'), t.x + t.w - 8, t.y + t.h - 9);
+  });
+
+  // info panel: the hovered level, or the selected one
+  const L = hover ? hover.L : save.selected;
+  const st = levelState(L), p = levelPreview(L);
+  const inf = lay.info;
+  panel(inf.x, inf.y, inf.w, inf.h);
+  ctx.textAlign = 'left';
+  let y = inf.y + 34;
+  const line = (text, color, size, gapAfter) => {
+    ctx.font = font(size || 8);
+    ctx.fillStyle = color || '#cfe9e4';
+    ctx.fillText(text, inf.x + 20, y);
+    y += gapAfter || 22;
+  };
+  line(levelName(L) + (p.guardian ? `  (LV ${L})` : ''), p.guardian ? '#ff7a7a' : '#eaf6ff', 14, 26);
+  line(st === 'beaten' ? 'CLEARED - REPLAY FOR RED AND BLUE' : st === 'next' ? 'NEXT UP - FIRST CLEAR' : `LOCKED - CLEAR ${levelName(save.level)} FIRST`,
+       st === 'beaten' ? '#ffd84a' : st === 'next' ? '#7fe9ff' : '#8a93a0', 8, 30);
+  drawMiniBoss(p, inf.x + inf.w / 2, y + 60, inf.w - 80, 110, st === 'locked', false);
+  y += 136;
+  if (st === 'locked') {
+    line('BOSS DETAILS UNLOCK WHEN YOU REACH IT', '#6b7480');
+  } else {
+    line(`BOSS: ${p.count} BLOCKS, ${p.cols} x ${p.rows}`);
+    // two gun types per line so long lists stay inside the panel
+    const gunList = Object.keys(p.guns).map(k => `${k.toUpperCase()} x${p.guns[k]}`);
+    if (!gunList.length) line('GUNS: NONE');
+    for (let i = 0; i < gunList.length; i += 2) line((i ? '      ' : 'GUNS: ') + gunList.slice(i, i + 2).join('   '), undefined, 8, 18);
+    y += 4;
+    line(`CORE HP: ${p.coreHp}`, '#9ff7ff', 8, 30);
+    ctx.font = font(8);
+    ctx.fillStyle = '#9fd3cc';
+    ctx.fillText(st === 'next' ? 'FIRST CLEAR PAYS ABOUT' : 'A REPLAY PAYS ABOUT', inf.x + 20, y);
+    y += 26;
+    const cols = [['red', p.red], ['blue', p.blue]];
+    if (st === 'next') cols.unshift(['white', p.white]);
+    cols.forEach(([k, v], i) => {
+      const x = inf.x + 34 + i * 96;
+      currencyIcon(x, y - 4, k, 3);
+      ctx.font = font(9);
+      ctx.fillStyle = CUR[k].text;
+      ctx.textAlign = 'left';
+      ctx.fillText(String(v), x + 16, y + 1);
+    });
+  }
+
+  // buttons
+  const fb = lay.fight, canFight = levelState(save.selected) !== 'locked';
+  panel(fb.x, fb.y, fb.w, fb.h, inRect(fb, mouse.x, mouse.y) ? '#ffffff' : '#7cf29a', '#2e8a45');
+  ctx.textAlign = 'center';
+  ctx.font = font(11);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(canFight ? `FIGHT ${levelName(save.selected)}` : 'PICK A LEVEL', fb.x + fb.w / 2, fb.y + 29);
+  const bb = lay.back;
+  panel(bb.x, bb.y, bb.w, bb.h, inRect(bb, mouse.x, mouse.y) ? '#ffffff' : '#8fd0c6');
+  ctx.font = font(9);
+  ctx.fillStyle = '#cfe9e4';
+  ctx.fillText('< HANGAR', bb.x + bb.w / 2, bb.y + 27);
+  ctx.font = font(7);
+  ctx.fillStyle = 'rgba(207,233,228,0.45)';
+  ctx.fillText('CLICK A LEVEL TO SELECT IT   -   ENTER FIGHTS   -   ESC OR M BACK', W / 2, H - 16);
+  ctx.textAlign = 'left';
+  drawFsButton();
+}
+
+function levelsClick(mx, my) {
+  const lay = levelsLayout();
+  if (inRect(lay.back, mx, my)) { mode = 'hangar'; return; }
+  if (inRect(lay.fight, mx, my)) { if (levelState(save.selected) !== 'locked') startFight(save.selected); return; }
+  const t = lay.tiles.find(t => inRect(t, mx, my));
+  if (t && levelState(t.L) !== 'locked') { save.selected = t.L; writeSave(); }
+}
+
+window.addEventListener('wheel', e => {
+  if (mode === 'levels') levelsScroll = (levelsScroll || 0) + Math.sign(e.deltaY);
+}, { passive: true });
+
+// hangar button that opens the map
+function mapButton() { return { x: W / 2 - 110, y: 58, w: 220, h: 28 }; }
+function drawMapButton() {
+  const b = mapButton();
+  panel(b.x, b.y, b.w, b.h, inRect(b, mouse.x, mouse.y) ? '#ffffff' : '#8fd0c6');
+  ctx.textAlign = 'center';
+  ctx.font = font(8);
+  ctx.fillStyle = '#cfe9e4';
+  ctx.fillText('LEVEL MAP  [M]', W / 2, b.y + 19);
 }
 
 // ---------- other screens ----------
@@ -1991,7 +2317,7 @@ function loop(timestamp) {
   lastTime = timestamp;
 
   if (mode === 'fight' && !paused) update(dt);
-  else if (mode === 'title') updateIdle(dt);
+  else if (mode === 'title' || mode === 'levels') updateIdle(dt);
   else if (mode === 'cleared' || mode === 'dead') {
     particles.forEach(p => { p.age += dt; p.x += p.vx * dt; p.y += p.vy * dt; });
     particles = particles.filter(p => p.age < p.life);
@@ -2002,6 +2328,7 @@ function loop(timestamp) {
   else if (mode === 'hangar') drawHangar();
   else if (mode === 'cleared') drawCleared();
   else if (mode === 'dead') drawDead();
+  else if (mode === 'levels') drawLevels();
 
   requestAnimationFrame(loop);
 }
@@ -2017,7 +2344,15 @@ window.addEventListener('keydown', e => {
     if (b) b.act();
     return;
   }
+  if (mode === 'levels') {
+    if (k === 'escape' || k === 'm' || k === 'b' || k === 'backspace') mode = 'hangar';
+    if (k === 'enter' && levelState(save.selected) !== 'locked') startFight(save.selected);
+    if (k === 'arrowup') levelsScroll = (levelsScroll || 0) - 1;
+    if (k === 'arrowdown') levelsScroll = (levelsScroll || 0) + 1;
+    return;
+  }
   if (mode === 'hangar') {
+    if (k === 'm') { mode = 'levels'; levelsScroll = null; return; }
     if (k === 'enter') startFight(save.selected);
     if (k === 'arrowleft') pickLevel(-1);
     if (k === 'arrowright') pickLevel(1);
@@ -2035,6 +2370,7 @@ window.addEventListener('click', e => {
     if (b) b.act();
     return;
   }
+  if (mode === 'levels') { levelsClick(e.clientX, e.clientY); return; }
   if (mode === 'hangar') hangarClick(e.clientX, e.clientY);
 });
 

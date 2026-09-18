@@ -20,6 +20,7 @@ before the next fight. No build step, no libraries, no network calls.
 | Launch (hangar) | `Enter`, or click LAUNCH |
 | Reset save (hangar) | `R` |
 | Pick level (hangar) | `<` `>` beside FIGHT, or arrow keys |
+| Level map (hangar) | the LEVEL MAP button, or `M` |
 
 ## The loop
 
@@ -35,6 +36,11 @@ Each level builds a boss out of blocks on a rotating grid. Three kinds:
 Clearing a level for the first time is the only way to earn white crystals.
 You can go back and replay any level you have unlocked for more red and blue,
 and the bigger the boss, the bigger the payout.
+
+When the core blows, the rest of the boss shatters in a chain reaction and every
+drop flies to your ship before the win screen appears. The level map (from the
+hangar) shows every level in sectors of five, with each boss previewed, what you
+have cleared, what is next, and what a fight pays.
 
 Every block you break pays out salvage. Orbs magnet toward you; collect them to
 charge the pulse and bank currency. Clearing a level auto-salvages the wreck, so
