@@ -462,8 +462,12 @@ function makeBoss(level) {
 
   const armourTotal = blocks.filter(b => b.kind !== 'core').length;
   return {
-    x: W / 2, y: H * 0.34, angle: 0,
-    spin: (rng() < 0.5 ? -1 : 1) * (0.10 + level * 0.012),
+    x: W / 2, y: H * 0.34, angle: Math.PI / 2,   // local +x is the boss's front: it starts facing down at you
+    spin: 0, vx: 0, vy: 0,
+    turn: 1.1 + level * 0.03,
+    dashSpeed: Math.min(620, 300 + level * 11 + (guardian ? 80 : 0)),
+    sitTime: Math.max(1.1, 2.4 - level * 0.05),
+    ai: { state: 'sit', t: 2.2 },
     t: 0, cols, rows, cell, grid, blocks, core, level, guardian,
     armourTotal, armourLeft: armourTotal, sealed: true,
   };
@@ -682,6 +686,17 @@ function addFlak(x, y, angle, speed, r, color, homing) {
   flak.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, r, color: color || '#ff9a1f', homing: homing || 0, life: 9 });
 }
 
+// Heading that intercepts the ship if it keeps its current velocity (two quick
+// refinements of the flight time are plenty at these speeds).
+function leadAngle(x, y, speed) {
+  let t = dist(x, y, player.x, player.y) / speed;
+  for (let i = 0; i < 2; i++) {
+    const px = player.x + player.vx * t, py = player.y + player.vy * t;
+    t = dist(x, y, px, py) / speed;
+  }
+  return Math.atan2(player.y + player.vy * t - y, player.x + player.vx * t - x);
+}
+
 function runGun(b, dt) {
   const g = b.gun, w = blockWorld(b);
   const toPlayer = Math.atan2(player.y - w.y, player.x - w.x);
@@ -710,20 +725,21 @@ function runGun(b, dt) {
   g.volley++;
   if (g.type === 'aimed') {
     // a line of three down the same heading: sidestep it
-    [235, 280, 325].forEach(v => addFlak(w.x, w.y, toPlayer, v, 4));
+    // aimed where the ship is heading, not where it is, so drifting will not dodge it
+    [310, 370, 430].forEach(v => addFlak(w.x, w.y, leadAngle(w.x, w.y, v), v, 4));
   } else if (g.type === 'spread') {
     // a ring of 10 that alternates by half a gap each volley: stand in a gap
     const n = 8, base = (g.volley % 2) * (Math.PI / n);
-    for (let i = 0; i < n; i++) addFlak(w.x, w.y, base + (Math.PI * 2 * i) / n, 185, 4);
+    for (let i = 0; i < n; i++) addFlak(w.x, w.y, base + (Math.PI * 2 * i) / n, 245, 4);
   } else if (g.type === 'spiral') {
     // two arms turning at a steady rate: circle with them
     g.phase += 0.3;
-    addFlak(w.x, w.y, g.phase, 195, 3.5);
-    addFlak(w.x, w.y, g.phase + Math.PI, 195, 3.5);
+    addFlak(w.x, w.y, g.phase, 255, 3.5);
+    addFlak(w.x, w.y, g.phase + Math.PI, 255, 3.5);
   } else if (g.type === 'seeker') {
     // two slow missiles launched straight up and down, then turning in
-    addFlak(w.x, w.y, -Math.PI / 2, 140, 5, '#ff7a1a', 2.2);
-    addFlak(w.x, w.y, Math.PI / 2, 140, 5, '#ff7a1a', 2.2);
+    addFlak(w.x, w.y, -Math.PI / 2, 185, 5, '#ff7a1a', 3.1);
+    addFlak(w.x, w.y, Math.PI / 2, 185, 5, '#ff7a1a', 3.1);
   }
 }
 
@@ -856,6 +872,52 @@ function hurtPlayer(amount) {
   if (player.hull <= 0) { player.hull = 0; failFight(); }
 }
 
+// ---------- boss hunting ----------
+// The boss hunts you in a loop: it sits and tracks you, charges up while its
+// head locks on (a warning line shows the aim), dashes at where you are --
+// bending toward you as it goes -- then pulls up short and sits again. Its
+// front, marked by the face, always shows where it is aimed.
+function bossAI(dt, ext) {
+  const ai = boss.ai;
+  ai.t -= dt;
+  const toP = Math.atan2(player.y - boss.y, player.x - boss.x);
+  const turnTo = rate => {
+    const d = ((toP - boss.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    boss.angle += clamp(d, -rate * dt, rate * dt);
+  };
+  const settle = () => { const k = Math.pow(0.03, dt); boss.vx *= k; boss.vy *= k; };
+  const stopAt = ext + 50;   // pulls up short of the ship instead of parking on it
+
+  if (ai.state === 'sit') {
+    turnTo(boss.turn * 0.6);
+    settle();
+    if (ai.t <= 0) { ai.state = 'charge'; ai.t = boss.guardian ? 0.75 : 0.95; }
+  } else if (ai.state === 'charge') {
+    turnTo(boss.turn * 2.6);
+    settle();
+    if (ai.t <= 0) { ai.state = 'dash'; ai.t = 1.2; ai.tx = player.x; ai.ty = player.y; }
+  } else {
+    // homing: the target point slides toward the ship during the dash
+    const k = Math.min(1, 1.4 * dt);
+    ai.tx += (player.x - ai.tx) * k;
+    ai.ty += (player.y - ai.ty) * k;
+    const dx = ai.tx - boss.x, dy = ai.ty - boss.y, d = Math.hypot(dx, dy);
+    const want = d > stopAt ? Math.min(boss.dashSpeed, (d - stopAt) * 3.5) : 0;
+    const a = Math.atan2(dy, dx), blend = Math.min(1, 6 * dt);
+    boss.vx += (Math.cos(a) * want - boss.vx) * blend;
+    boss.vy += (Math.sin(a) * want - boss.vy) * blend;
+    turnTo(boss.turn * 1.6);
+    if (ai.t <= 0 || d <= stopAt + 4) { ai.state = 'sit'; ai.t = boss.sitTime; }
+  }
+
+  boss.x += boss.vx * dt;
+  boss.y += boss.vy * dt;
+  // stay fully on screen where there is room for it
+  const mx = Math.min(ext + 8, W / 2), my = Math.min(ext + 8, H / 2);
+  boss.x = clamp(boss.x, mx, W - mx);
+  boss.y = clamp(boss.y, my, H - my);
+}
+
 function update(dt) {
   // the first moment after the core blows plays in slow motion
   if (victory && victory.t < 0.3) dt *= 0.35;
@@ -922,11 +984,8 @@ function update(dt) {
   let midY = Math.max(H * 0.34, ext + 16 + H * 0.12);
   let swayY = H * 0.12;
   if (midY > H * 0.5) { midY = H * 0.5; swayY = Math.max(0, midY - ext - 16); }
-  if (!victory) {
-    boss.x = W / 2 + Math.sin(boss.t * 0.33) * swayX;
-    boss.y = midY + Math.sin(boss.t * 0.51) * swayY;
-  }
-  boss.angle += boss.spin * dt * (victory ? 0.25 : 1);
+  if (!victory) bossAI(dt, ext);
+  else boss.angle += 0.2 * dt;   // the wreck drifts round slowly as it comes apart
   if (boss.core.alive) boss.sealed = !coreExposed();
   boss.blocks.forEach(b => {
     if (!b.alive) return;
@@ -1243,6 +1302,80 @@ function drawBlockFilled(b, s, h, base, sealed, frac) {
   }
 }
 
+// Where the boss's face sits: the front edge (local +x) of the blocks nearest
+// its centre line, so it reads as a head on whatever shape the boss is.
+function bossHeadX() {
+  // the centre column first, so the face sits on a block rather than in a gap
+  for (const band of [0.5, 1.01]) {
+    let fx = -Infinity;
+    boss.blocks.forEach(b => {
+      if (!b.alive) return;
+      const l = blockLocal(b);
+      if (Math.abs(l.y) <= boss.cell * band && l.x > fx) fx = l.x;
+    });
+    if (fx > -Infinity) return fx;
+  }
+  return blockLocal(boss.core).x;
+}
+
+// Drawn in the boss's rotated frame. Calm cyan eyes while it sits, orange and
+// flickering while it charges, red while it dashes.
+function drawBossHead() {
+  const c = boss.cell * 1.35, fx = bossHeadX();
+  const st = boss.ai ? boss.ai.state : 'sit';
+  const col = victory ? '#555c66' : st === 'dash' ? '#ff3b3b' : st === 'charge' ? '#ff9a1f' : '#dff7ff';
+  const lit = st === 'charge' ? 0.55 + 0.45 * Math.sin(elapsed * 34) : 1;
+
+  // visor along the front edge
+  glowOn(col, st === 'sit' ? 10 : 24);
+  ctx.strokeStyle = col;
+  ctx.globalAlpha = lit;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(fx + c * 0.46, -c * 0.62);
+  ctx.lineTo(fx + c * 0.56, 0);
+  ctx.lineTo(fx + c * 0.46, c * 0.62);
+  ctx.stroke();
+
+  // eyes, looking forward
+  ctx.fillStyle = col;
+  for (const side of [-1, 1]) {
+    const ex = fx + c * 0.12, ey = side * c * 0.26;
+    ctx.beginPath(); ctx.ellipse(ex, ey, c * 0.13, c * 0.1, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  glowOff();
+  ctx.fillStyle = '#10141c';
+  for (const side of [-1, 1]) {
+    ctx.beginPath(); ctx.arc(fx + c * 0.19, side * c * 0.26, c * 0.05, 0, Math.PI * 2); ctx.fill();
+  }
+  // brows: the inner ends pushed forward, so the face scowls ahead
+  ctx.strokeStyle = col;
+  ctx.lineWidth = 2.5;
+  for (const side of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(fx + c * 0.04, side * c * 0.1);
+    ctx.lineTo(fx - c * 0.14, side * c * 0.44);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// While charging, a warning line runs from the face to the ship and firms up
+// as the dash gets closer.
+function drawChargeLine() {
+  if (!boss.ai || boss.ai.state !== 'charge' || victory) return;
+  const fx = bossHeadX() + boss.cell * 0.6;
+  const hx = boss.x + Math.cos(boss.angle) * fx, hy = boss.y + Math.sin(boss.angle) * fx;
+  const total = boss.guardian ? 0.75 : 0.95, k = 1 - boss.ai.t / total;
+  ctx.save();
+  ctx.setLineDash([10, 8]);
+  ctx.lineDashOffset = -elapsed * 60;
+  ctx.strokeStyle = `rgba(255,154,31,${0.2 + k * 0.6})`;
+  ctx.lineWidth = 2 + k * 2;
+  ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(player.x, player.y); ctx.stroke();
+  ctx.restore();
+}
+
 function drawBoss() {
   ctx.save();
   ctx.translate(boss.x, boss.y);
@@ -1270,6 +1403,8 @@ function drawBoss() {
     ctx.globalAlpha = 1;
     ctx.restore();
   });
+
+  if (boss.core.alive || boss.blocks.some(b => b.alive)) drawBossHead();
 
   // An exposed core gets a halo, so it reads as the target from across the arena.
   if (boss.core.alive && !boss.sealed) {
@@ -1525,6 +1660,7 @@ function drawWorld() {
   }
 
   drawBoss();
+  drawChargeLine();
   if (victory) drawVictoryRings();
 
   // beams: a thin telegraph while charging, a wide beam while firing
