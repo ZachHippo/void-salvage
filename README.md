@@ -18,6 +18,7 @@ before the next fight. No build step, no libraries, no network calls.
 | Fullscreen | `F`, or the button on any menu screen |
 | Launch (hangar) | `Enter`, or click LAUNCH |
 | Reset save (hangar) | `R` |
+| Pick level (hangar) | `<` `>` beside FIGHT, or arrow keys |
 
 ## The loop
 
@@ -28,6 +29,10 @@ Each level builds a boss out of blocks on a rotating grid. Three kinds:
   stops for good, so what you shoot first shapes the whole fight.
 - **Core** (cyan) -- sealed and immune until the armour is 80% gone. Blow it to
   clear the level.
+
+Clearing a level for the first time is the only way to earn white crystals.
+You can go back and replay any level you have unlocked for more red and blue,
+and the bigger the boss, the bigger the payout.
 
 Every block you break pays out salvage. Orbs magnet toward you; collect them to
 charge the pulse and bank currency. Clearing a level auto-salvages the wreck, so

@@ -62,7 +62,15 @@ function distToRay(px, py, ox, oy, dx, dy, len) {
 // progress. Best level reached is the score.
 const SAVE_KEY = 'voidsalvage:save:v3';
 const OLD_SAVE_KEY = 'voidsalvage:save:v2';
-function freshSave() { return { wallet: emptyWallet(), upgrades: {}, level: 1, bestLevel: 1, clears: 0 }; }
+function freshSave() { return { wallet: emptyWallet(), upgrades: {}, level: 1, bestLevel: 1, clears: 0, selected: 1 }; }
+
+// save.level is the frontier: the first level not yet beaten. Anything from 1 up
+// to it can be fought; only a win AT the frontier is a first clear.
+function normalizeSave(s) {
+  if (!s.selected || s.selected > s.level || s.selected < 1) s.selected = s.level;
+  return s;
+}
+function levelName(L) { return L % 5 === 0 ? `GUARD ${L / 5}` : `LEVEL ${L}`; }
 
 let save = loadSave();
 
@@ -72,7 +80,7 @@ function loadSave() {
     if (raw) {
       const s = Object.assign(freshSave(), JSON.parse(raw));
       s.wallet = Object.assign(emptyWallet(), s.wallet);
-      return s;
+      return normalizeSave(s);
     }
     // v2 had a single salvage pool: carry it over as red and blue, keep upgrades.
     const old = localStorage.getItem(OLD_SAVE_KEY);
@@ -83,7 +91,7 @@ function loadSave() {
       const half = Math.floor((o.salvage || 0) / 2);
       s.wallet.red = half;
       s.wallet.blue = (o.salvage || 0) - half;
-      return s;
+      return normalizeSave(s);
     }
   } catch (e) { /* blocked storage: run in memory */ }
   return freshSave();
@@ -456,9 +464,11 @@ function blockAtWorld(x, y) {
 }
 
 // ---------- fight lifecycle ----------
-function startFight() {
+function startFight(level) {
   makePlayer();
-  boss = makeBoss(save.level);
+  const L = clamp(level || save.selected, 1, save.level);
+  boss = makeBoss(L);
+  boss.firstClear = L === save.level;
   shots = []; flak = []; orbs = []; particles = []; beams = [];
   drones = [];
   for (let i = 0; i < S.drones; i++) drones.push({ phase: (Math.PI * 2 * i) / S.drones, timer: rand(0, 0.5), x: 0, y: 0 });
@@ -499,7 +509,9 @@ function breakBlock(b) {
   if (b.kind === 'gun')    drop('red', 3, (6 + L * 2.4) / 3);
   if (isCore) {
     const g = boss.guardian ? 2 : 1;
-    drop('white', 3 + Math.floor(L / 2) * g + S.whiteBonus, 1);
+    // White crystals are the first-clear reward. Replays still pay red and blue,
+    // and those scale with the level, so farming a harder boss pays more.
+    if (boss.firstClear) drop('white', 3 + Math.floor(L / 2) * g + S.whiteBonus, 1);
     drop('red', 6, (20 + L * 6) * g / 6);
     drop('blue', 6, (20 + L * 6) * g / 6);
   }
@@ -543,8 +555,11 @@ function clearFight() {
   orbs = [];
   bankRun();
   save.clears++;
-  save.level++;
-  if (save.level > save.bestLevel) save.bestLevel = save.level;
+  if (boss.firstClear) {
+    save.level++;
+    save.selected = save.level;
+    if (save.level > save.bestLevel) save.bestLevel = save.level;
+  }
   writeSave();
   mode = 'cleared';
 }
@@ -1221,7 +1236,7 @@ function drawHUD() {
   ctx.textAlign = 'center';
   ctx.font = px(12);
   ctx.fillStyle = boss.guardian ? '#ff5a66' : '#ffffff';
-  ctx.fillText(boss.guardian ? `GUARD ${boss.level / 5}` : `LEVEL ${boss.level}`, x0 + pw / 2, 42);
+  ctx.fillText(levelName(boss.level) + (boss.firstClear ? '' : ' - REPLAY'), x0 + pw / 2, 42);
   ctx.font = px(8);
   ctx.fillStyle = boss.sealed ? '#9d95ff' : '#ffd166';
   ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}%` : 'CORE EXPOSED!', x0 + pw / 2, 64);
@@ -1290,6 +1305,9 @@ function hangarLayout() {
     };
   });
   const fight = { x: cx - unit * 0.95, y: cy - unit * 0.42, w: unit * 1.9, h: unit * 0.84 };
+  const aw = unit * 0.34;
+  fight.prev = { x: fight.x - aw - 8, y: cy - aw / 2, w: aw, h: aw };
+  fight.next = { x: fight.x + fight.w + 8, y: cy - aw / 2, w: aw, h: aw };
   return { nodes, fight, cx, cy };
 }
 
@@ -1385,7 +1403,8 @@ function drawHangar() {
   ctx.fillText('FIGHT', cx, cy + 2);
   ctx.font = px(7);
   ctx.fillStyle = '#c9ffd6';
-  ctx.fillText(save.level % 5 === 0 ? `GUARD ${save.level / 5}` : `LEVEL ${save.level}`, cx, cy + 20);
+  ctx.fillText(levelName(save.selected), cx, cy + 20);
+  drawLevelPicker(fight, cx);
 
   const hover = nodeAt(nodes, mouse.x, mouse.y);
   nodes.forEach(n => {
@@ -1456,7 +1475,7 @@ function drawHangar() {
   ctx.textAlign = 'center';
   ctx.font = px(7);
   ctx.fillStyle = 'rgba(207,233,228,0.5)';
-  ctx.fillText('HOVER A NODE FOR DETAILS  -  GREEN = YOU CAN AFFORD IT  -  CLICK TO BUY  -  ENTER TO FIGHT  -  F FULLSCREEN  -  R RESETS SAVE',
+  ctx.fillText('GREEN = AFFORDABLE  -  CLICK TO BUY  -  ARROWS PICK LEVEL  -  ENTER FIGHTS  -  R RESETS SAVE',
                W / 2, H - 14);
 
   drawFsButton();
@@ -1466,8 +1485,10 @@ function drawHangar() {
 
 function hangarClick(mx, my) {
   const { nodes, fight } = hangarLayout();
-  if (mx >= fight.x && mx <= fight.x + fight.w && my >= fight.y && my <= fight.y + fight.h) {
-    startFight();
+  if (inRect(fight.prev, mx, my)) { pickLevel(-1); return; }
+  if (inRect(fight.next, mx, my)) { pickLevel(1); return; }
+  if (inRect(fight, mx, my)) {
+    startFight(save.selected);
     return;
   }
   const n = nodeAt(nodes, mx, my);
@@ -1521,26 +1542,96 @@ function drawTitle() {
   drawFsButton();
 }
 
-function drawEndScreen(title, titleColor, subtitle, prompt) {
+
+// ---------- level picker ----------
+function pickLevel(d) {
+  save.selected = clamp(save.selected + d, 1, save.level);
+  writeSave();
+}
+
+function drawLevelPicker(fight, cx) {
+  const arrow = (r, glyph, enabled) => {
+    const hot = enabled && inRect(r, mouse.x, mouse.y);
+    panel(r.x, r.y, r.w, r.h, hot ? '#ffffff' : (enabled ? '#7cf29a' : '#2a3038'),
+          enabled ? 'rgba(22,72,36,0.96)' : 'rgba(12,14,18,0.96)');
+    ctx.textAlign = 'center';
+    ctx.font = px(10);
+    ctx.fillStyle = enabled ? '#ffffff' : '#3a424c';
+    ctx.fillText(glyph, r.x + r.w / 2 + 1, r.y + r.h / 2 + 5);
+  };
+  arrow(fight.prev, '<', save.selected > 1);
+  arrow(fight.next, '>', save.selected < save.level);
+
+  // what this fight pays, above the button
+  const first = save.selected === save.level;
+  const tag = first ? 'NEW - FIRST CLEAR PAYS WHITE' : 'REPLAY - RED + BLUE ONLY';
+  ctx.font = px(7);
+  const tw = ctx.measureText(tag).width;
+  ctx.fillStyle = 'rgba(12,6,16,0.9)';
+  ctx.fillRect(cx - tw / 2 - 6, fight.y - 22, tw + 12, 16);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = first ? '#ffd84a' : '#8a93a0';
+  ctx.fillText(tag, cx, fight.y - 10);
+}
+
+// ---------- end screens ----------
+// Nothing advances on a stray click: you pick where to go next.
+function endButtons() {
+  const L = boss ? boss.level : save.selected;
+  const toHangar = () => { mode = 'hangar'; };
+  const green = { fill: '#2e8a45', border: '#7cf29a' };
+  const plain = { fill: 'rgba(26,32,38,0.95)', border: '#8fd0c6' };
+  const defs = mode === 'cleared'
+    ? [
+        Object.assign({ label: 'NEXT LEVEL', key: 'n', act: () => startFight(Math.min(L + 1, save.level)) }, green),
+        Object.assign({ label: 'REPLAY', key: 'r', act: () => startFight(L) }, plain),
+        Object.assign({ label: 'HANGAR', key: 'h', act: toHangar }, plain),
+      ]
+    : [
+        Object.assign({ label: 'RETRY', key: 'r', act: () => startFight(L) }, green),
+        Object.assign({ label: 'HANGAR', key: 'h', act: toHangar }, plain),
+      ];
+  const bw = 168, bh = 50, gap = 16;
+  const total = defs.length * bw + (defs.length - 1) * gap;
+  return defs.map((d, i) => Object.assign(d, { x: W / 2 - total / 2 + i * (bw + gap), y: H / 2 + 50, w: bw, h: bh }));
+}
+
+function drawEndScreen(title, titleColor, subtitle, subtitleColor) {
   pixelPass(drawFightBackdropStill);
   scanlines();
   const cy = H / 2;
-  panel(W / 2 - 300, cy - 130, 600, 250);
+  panel(W / 2 - 310, cy - 130, 620, 280);
   let y = centreText([
     { text: title, font: px(26), color: titleColor, drop: '#1a0d1e', gap: 44 },
-    { text: subtitle, color: '#cfe9e4', font: px(9), gap: 42 },
+    { text: subtitle, color: subtitleColor || '#cfe9e4', font: px(9), gap: 42 },
   ], cy - 70);
   walletRow(y, runWallet, '+', 4);
-  centreText([{ text: prompt, color: '#ffd84a', font: px(9) }], y + 60);
+
+  const bs = endButtons();
+  bs.forEach(b => {
+    const hot = inRect(b, mouse.x, mouse.y);
+    panel(b.x, b.y, b.w, b.h, hot ? '#ffffff' : b.border, b.fill);
+    ctx.textAlign = 'center';
+    ctx.font = px(10);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + 31);
+  });
+  const hint = bs.map((b, i) => `${i === 0 ? 'ENTER' : b.key.toUpperCase()} ${b.label}`).join('   -   ');
+  centreText([{ text: hint, color: 'rgba(207,233,228,0.5)', font: px(7) }], cy + 132);
+  drawFsButton();
 }
 
 function drawCleared() {
-  const lv = save.level - 1;
-  drawEndScreen('CORE DESTROYED', '#ffd84a', lv % 5 === 0 ? `GUARD ${lv / 5} DOWN` : `LEVEL ${lv} CLEARED`, 'CLICK FOR THE HANGAR');
+  const L = boss.level;
+  if (boss.firstClear) {
+    drawEndScreen('CORE DESTROYED', '#ffd84a', `${levelName(L)} CLEARED - FIRST CLEAR!`, '#ffd84a');
+  } else {
+    drawEndScreen('CORE DESTROYED', '#ffd84a', `${levelName(L)} CLEARED - REPLAY, NO WHITE`);
+  }
 }
 
 function drawDead() {
-  drawEndScreen('SHIP LOST', '#ff5a66', `LEVEL ${save.level} - YOU KEEP WHAT YOU GRABBED`, 'CLICK TO REFIT AND RETRY');
+  drawEndScreen('SHIP LOST', '#ff5a66', `${levelName(boss.level)} - YOU KEEP WHAT YOU GRABBED`);
 }
 
 // End screens keep the arena behind them, held perfectly still.
@@ -1584,9 +1675,16 @@ window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k === 'f') { toggleFullscreen(); return; }
   if (mode === 'title') { mode = 'hangar'; return; }
-  if (mode === 'cleared' || mode === 'dead') { mode = 'hangar'; return; }
+  if (mode === 'cleared' || mode === 'dead') {
+    const bs = endButtons();
+    const b = k === 'enter' ? bs[0] : bs.find(b => b.key === k);
+    if (b) b.act();
+    return;
+  }
   if (mode === 'hangar') {
-    if (k === 'enter') startFight();
+    if (k === 'enter') startFight(save.selected);
+    if (k === 'arrowleft') pickLevel(-1);
+    if (k === 'arrowright') pickLevel(1);
     if (k === 'r') { save = freshSave(); computeStats(); writeSave(); }
     return;
   }
@@ -1596,7 +1694,11 @@ window.addEventListener('keydown', e => {
 window.addEventListener('click', e => {
   if (mode !== 'fight' && inRect(fsButton(), e.clientX, e.clientY)) { toggleFullscreen(); return; }
   if (mode === 'title') { mode = 'hangar'; return; }
-  if (mode === 'cleared' || mode === 'dead') { mode = 'hangar'; return; }
+  if (mode === 'cleared' || mode === 'dead') {
+    const b = endButtons().find(b => inRect(b, e.clientX, e.clientY));
+    if (b) b.act();
+    return;
+  }
   if (mode === 'hangar') hangarClick(e.clientX, e.clientY);
 });
 
