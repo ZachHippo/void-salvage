@@ -937,40 +937,31 @@ function drawCracks(b, h, hurt) {
 }
 
 // Bevelled plate: lit from the top-left, inset panel, corner rivets.
-// Geometric plate: a sharp tile, bevelled edges, an inset diamond and a hard
-// centre facet. Damage darkens the body.
 function drawPlate(s, h, base, hurt) {
-  ctx.fillStyle = shade(base, -0.1 - hurt * 0.22);
-  ctx.fillRect(-h, -h, s, s);
+  ctx.fillStyle = shade(base, -0.08 - hurt * 0.2);
+  roundRect(-h, -h, s, s, 4); ctx.fill();
 
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)';
   ctx.beginPath();
-  ctx.moveTo(-h + 1, h - 1); ctx.lineTo(-h + 1, -h + 1); ctx.lineTo(h - 1, -h + 1);
+  ctx.moveTo(-h + 1.5, h - 1.5); ctx.lineTo(-h + 1.5, -h + 1.5); ctx.lineTo(h - 1.5, -h + 1.5);
   ctx.stroke();
-  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctx.strokeStyle = 'rgba(0,0,0,0.4)';
   ctx.beginPath();
-  ctx.moveTo(h - 1, -h + 1); ctx.lineTo(h - 1, h - 1); ctx.lineTo(-h + 1, h - 1);
-  ctx.stroke();
-
-  const d = h * 0.62;
-  ctx.fillStyle = shade(base, 0.14);
-  ctx.beginPath();
-  ctx.moveTo(0, -d); ctx.lineTo(d, 0); ctx.lineTo(0, d); ctx.lineTo(-d, 0);
-  ctx.closePath();
-  ctx.fill();
-  ctx.strokeStyle = shade(base, 0.35);
-  ctx.lineWidth = 1;
+  ctx.moveTo(h - 1.5, -h + 1.5); ctx.lineTo(h - 1.5, h - 1.5); ctx.lineTo(-h + 1.5, h - 1.5);
   ctx.stroke();
 
-  ctx.fillStyle = shade(base, -0.25);
-  ctx.fillRect(-h * 0.16, -h * 0.16, h * 0.32, h * 0.32);
+  ctx.fillStyle = shade(base, 0.12);
+  roundRect(-h * 0.5, -h * 0.5, s * 0.5, s * 0.5, 2); ctx.fill();
+
+  ctx.fillStyle = 'rgba(0,0,0,0.38)';
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    ctx.beginPath(); ctx.arc(sx * (h - 4.5), sy * (h - 4.5), 1.4, 0, Math.PI * 2); ctx.fill();
+  }
 }
 
 // Turrets point their barrel away from the boss centre, so you can read which
 // way a gun is facing before it fires.
-// Turrets point their barrel away from the boss centre, so you can read which
-// way a gun is facing before it fires. The housing is a hexagon.
 function drawGunFace(b, h, base) {
   const l = blockLocal(b);
   const a = Math.atan2(l.y, l.x);
@@ -978,39 +969,38 @@ function drawGunFace(b, h, base) {
   ctx.rotate(a);
   ctx.fillStyle = shade(base, -0.34);
   ctx.fillRect(h * 0.3, -3.5, h + 4, 7);
-  ctx.fillStyle = '#1a0000';
-  ctx.fillRect(h * 1.3 + 1, -3, 6, 6);
+  ctx.fillStyle = '#160a00';
+  ctx.beginPath(); ctx.arc(h * 1.3 + 4, 0, 2.8, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
-  ctx.strokeStyle = shade(base, 0.35);
+  ctx.strokeStyle = shade(base, 0.28);
   ctx.lineWidth = 2;
-  polyPath(0, 0, h * 0.5, 6, 0);
-  ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 0, h * 0.44, 0, Math.PI * 2); ctx.stroke();
 }
 
 function drawCoreFace(s, h, hurt, sealed) {
   const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.5);
   ctx.fillStyle = sealed ? '#16323a' : '#0d3a44';
-  ctx.fillRect(-h, -h, s, s);
+  roundRect(-h, -h, s, s, 5); ctx.fill();
   ctx.strokeStyle = sealed ? 'rgba(159,247,255,0.5)' : '#9ff7ff';
   ctx.lineWidth = 2;
-  ctx.strokeRect(-h + 2, -h + 2, s - 4, s - 4);
+  roundRect(-h + 2, -h + 2, s - 4, s - 4, 4); ctx.stroke();
 
-  // a rotating diamond frame
   ctx.save();
   ctx.rotate(elapsed * 1.3);
   ctx.strokeStyle = `rgba(159,247,255,${sealed ? 0.4 : 0.85})`;
   ctx.lineWidth = 1.6;
-  ctx.strokeRect(-h * 0.55, -h * 0.55, h * 1.1, h * 1.1);
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * h * 0.5, Math.sin(a) * h * 0.5);
+    ctx.lineTo(Math.cos(a) * h * 0.8, Math.sin(a) * h * 0.8);
+    ctx.stroke();
+  }
   ctx.restore();
 
-  // hot centre: a glowing diamond that shrinks as the core takes damage
   glowOn('#9ff7ff', sealed ? 6 : 16 + pulse * 16);
   ctx.fillStyle = sealed ? '#3d6f7d' : `rgb(${170 + Math.round(pulse * 70)},255,255)`;
-  const d = h * 0.42 * (1 - hurt * 0.3);
-  ctx.beginPath();
-  ctx.moveTo(0, -d); ctx.lineTo(d, 0); ctx.lineTo(0, d); ctx.lineTo(-d, 0);
-  ctx.closePath();
-  ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, h * 0.36 * (1 - hurt * 0.3), 0, Math.PI * 2); ctx.fill();
   glowOff();
 }
 
@@ -1033,7 +1023,7 @@ function drawBoss() {
 
     if (b.flash > 0) {
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(-h, -h, s, s);
+      roundRect(-h, -h, s, s, 4); ctx.fill();
     } else if (b.kind === 'core') {
       drawCoreFace(s, h, hurt, sealed);
     } else {
@@ -1054,10 +1044,10 @@ function drawBoss() {
     const pulse = 0.5 + 0.5 * Math.sin(elapsed * 4.5);
     ctx.strokeStyle = `rgba(159,247,255,${0.3 + pulse * 0.45})`;
     ctx.lineWidth = 2;
-    polyPath(l.x, l.y, boss.cell * (1.15 + pulse * 0.45), 6, elapsed * 0.6); ctx.stroke();
+    ctx.beginPath(); ctx.arc(l.x, l.y, boss.cell * (1.15 + pulse * 0.45), 0, Math.PI * 2); ctx.stroke();
     ctx.strokeStyle = `rgba(159,247,255,${0.12 + pulse * 0.16})`;
     ctx.lineWidth = 1.2;
-    polyPath(l.x, l.y, boss.cell * (1.7 + pulse * 0.6), 6, -elapsed * 0.4); ctx.stroke();
+    ctx.beginPath(); ctx.arc(l.x, l.y, boss.cell * (1.7 + pulse * 0.6), 0, Math.PI * 2); ctx.stroke();
   }
 
   ctx.restore();
@@ -1154,6 +1144,95 @@ function drawBlockBars() {
   }
 }
 
+// The ship: a faceted hull lit from the upper left, a cockpit canopy, twin
+// engine nozzles that flare while thrusting, and blinking wingtip lights.
+// Points are in units of the ship's radius, nose along +x.
+const SHIP = {
+  nose: [1, 0], wingL: [-0.78, -0.82], notchL: [-0.34, -0.3], tail: [-0.56, 0],
+  notchR: [-0.34, 0.3], wingR: [-0.78, 0.82], spine: [0.1, 0],
+};
+function drawShip() {
+  const r = player.radius;
+  const P = k => [SHIP[k][0] * r, SHIP[k][1] * r];
+  const tri = (a, b2, c, color) => {
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.moveTo(...P(a)); ctx.lineTo(...P(b2)); ctx.lineTo(...P(c)); ctx.closePath(); ctx.fill();
+  };
+  const hit = player.invuln > 0 && Math.floor(elapsed * 20) % 2 === 0;
+  const thrusting = keys['w'] || keys['a'] || keys['s'] || keys['d'] ||
+                    keys['arrowup'] || keys['arrowdown'] || keys['arrowleft'] || keys['arrowright'];
+
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.rotate(player.angle);
+
+  // engine flames behind the two nozzles
+  if (thrusting) {
+    for (const side of [-1, 1]) {
+      const len = r * rand(0.55, 0.85);
+      glowOn('#7fd8ff', 14);
+      ctx.fillStyle = 'rgba(127,216,255,0.85)';
+      ctx.beginPath();
+      ctx.moveTo(-0.62 * r, side * 0.14 * r - 0.08 * r);
+      ctx.lineTo(-0.62 * r - len, side * 0.14 * r);
+      ctx.lineTo(-0.62 * r, side * 0.14 * r + 0.08 * r);
+      ctx.closePath(); ctx.fill();
+      glowOff();
+    }
+  }
+
+  // silhouette with the glow, then the facets on top of it
+  glowOn(hit ? '#ffffff' : '#7fd8ff', 18);
+  ctx.fillStyle = hit ? '#ffffff' : '#5fb8e8';
+  ctx.beginPath();
+  ['nose', 'wingL', 'notchL', 'tail', 'notchR', 'wingR'].forEach((k, i) => (i ? ctx.lineTo : ctx.moveTo).apply(ctx, P(k)));
+  ctx.closePath(); ctx.fill();
+  glowOff();
+
+  if (!hit) {
+    tri('nose', 'wingL', 'notchL', '#c4f1ff');     // upper wing, catching the light
+    tri('nose', 'notchL', 'spine', '#8fdcff');
+    tri('notchL', 'tail', 'spine', '#5fb8e8');
+    tri('spine', 'tail', 'notchR', '#3f93c8');
+    tri('nose', 'spine', 'notchR', '#4fa6d6');
+    tri('nose', 'notchR', 'wingR', '#2d74a8');     // lower wing, in shadow
+
+    // panel lines along the facet seams
+    ctx.strokeStyle = 'rgba(220,247,255,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(...P('nose')); ctx.lineTo(...P('spine')); ctx.lineTo(...P('tail'));
+    ctx.moveTo(...P('notchL')); ctx.lineTo(...P('spine')); ctx.lineTo(...P('notchR'));
+    ctx.stroke();
+
+    // cockpit canopy with a glint
+    ctx.fillStyle = '#0b2438';
+    ctx.beginPath();
+    ctx.moveTo(0.52 * r, 0); ctx.lineTo(0.16 * r, 0.13 * r); ctx.lineTo(0.02 * r, 0); ctx.lineTo(0.16 * r, -0.13 * r);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(160,235,255,0.9)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(0.4 * r, -0.03 * r); ctx.lineTo(0.2 * r, -0.09 * r); ctx.stroke();
+
+    // twin nozzles
+    ctx.fillStyle = '#16354f';
+    ctx.fillRect(-0.7 * r, -0.24 * r, 0.16 * r, 0.16 * r);
+    ctx.fillRect(-0.7 * r, 0.08 * r, 0.16 * r, 0.16 * r);
+  }
+
+  // outline and wingtip lights
+  ctx.strokeStyle = 'rgba(223,247,255,0.8)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ['nose', 'wingL', 'notchL', 'tail', 'notchR', 'wingR'].forEach((k, i) => (i ? ctx.lineTo : ctx.moveTo).apply(ctx, P(k)));
+  ctx.closePath(); ctx.stroke();
+  if (Math.floor(elapsed * 2.5) % 2 === 0) {
+    ctx.fillStyle = '#ff4a4a'; ctx.fillRect(...P('wingL'), 3, 3);
+    ctx.fillStyle = '#4dff88'; ctx.fillRect(P('wingR')[0], P('wingR')[1] - 3, 3, 3);
+  }
+  ctx.restore();
+}
+
 function drawWorld() {
   ctx.save();
   if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
@@ -1163,15 +1242,14 @@ function drawWorld() {
   player.trail.forEach(p => {
     const a = 1 - p.age / p.life;
     ctx.fillStyle = `rgba(120,200,255,${a * 0.5})`;
-    const q = 8 * a;
-    ctx.fillRect(p.x - q / 2, p.y - q / 2, q, q);
+    ctx.beginPath(); ctx.arc(p.x, p.y, 5 * a, 0, Math.PI * 2); ctx.fill();
   });
 
   if (pulseRing) {
     const a = 1 - pulseRing.age / pulseRing.life;
     ctx.strokeStyle = `rgba(159,247,255,${a * 0.9})`;
     ctx.lineWidth = 3 + a * 5;
-    polyPath(player.x, player.y, pulseRing.r, 6, pulseRing.age * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(player.x, player.y, pulseRing.r, 0, Math.PI * 2); ctx.stroke();
   }
 
   drawBoss();
@@ -1190,66 +1268,35 @@ function drawWorld() {
   particles.forEach(p => {
     ctx.globalAlpha = 1 - p.age / p.life;
     ctx.fillStyle = p.color;
-    ctx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
   });
   ctx.globalAlpha = 1;
 
   orbs.forEach(o => currencyIcon(o.x, o.y, o.cur, 2));
 
-  // enemy rounds: big orange hexagons with a hot core
+  // enemy rounds: big glowing orange bolts
   flak.forEach(f => {
-    const r = f.r * 1.35 + 2;
     glowOn(f.color, 14);
     ctx.fillStyle = f.color;
-    polyPath(f.x, f.y, r, 6, f.life * 3);
-    ctx.fill();
-    glowOff();
-    ctx.fillStyle = '#ffe2b8';
-    polyPath(f.x, f.y, r * 0.42, 6, f.life * 3);
-    ctx.fill();
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 1.3 + 1, 0, Math.PI * 2); ctx.fill();
   });
+  glowOff();
 
-  // our rounds (drones included): light neon-blue darts pointed along their flight
+  // our rounds (drones included): light neon blue
   glowOn('#7fe9ff', 12);
   ctx.fillStyle = '#7fe9ff';
-  shots.forEach(s => {
-    const a = Math.atan2(s.vy, s.vx), len = s.r * 2.6, wd = s.r * 0.9;
-    const cx = Math.cos(a), sy = Math.sin(a);
-    ctx.beginPath();
-    ctx.moveTo(s.x + cx * len, s.y + sy * len);
-    ctx.lineTo(s.x - sy * wd, s.y + cx * wd);
-    ctx.lineTo(s.x - cx * len, s.y - sy * len);
-    ctx.lineTo(s.x + sy * wd, s.y - cx * wd);
-    ctx.closePath();
-    ctx.fill();
-  });
+  shots.forEach(s => { ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill(); });
 
   glowOn('#7cffb2', 10);
   ctx.fillStyle = '#7cffb2';
-  drones.forEach(d => { polyPath(d.x, d.y, 8, 4, d.phase * 2); ctx.fill(); });
+  drones.forEach(d => { ctx.beginPath(); ctx.arc(d.x, d.y, 7, 0, Math.PI * 2); ctx.fill(); });
 
-  // ship
-  const hitWhite = player.invuln > 0;
-  ctx.save();
-  ctx.translate(player.x, player.y);
-  ctx.rotate(player.angle);
-  const r = player.radius;
-  glowOn(hitWhite ? '#ffffff' : '#7fd8ff', 18);
-  ctx.fillStyle = hitWhite ? '#ffffff' : '#7fd8ff';
-  ctx.beginPath();
-  ctx.moveTo(r, 0);
-  ctx.lineTo(-r * 0.8, r * 0.7);
-  ctx.lineTo(-r * 0.4, 0);
-  ctx.lineTo(-r * 0.8, -r * 0.7);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-  glowOff();
+  drawShip();
 
   if (player.shield > 0) {
     ctx.strokeStyle = `rgba(159,247,255,${0.25 + 0.4 * (player.shield / Math.max(1, S.maxShield))})`;
     ctx.lineWidth = 2;
-    polyPath(player.x, player.y, player.radius + 9, 6, elapsed * 0.8); ctx.stroke();
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.radius + 9, 0, Math.PI * 2); ctx.stroke();
   }
 
   ctx.restore();
