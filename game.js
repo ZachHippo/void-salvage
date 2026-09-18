@@ -115,6 +115,9 @@ const UPGRADES = [
   { id: 'crit',        name: 'Weak Point Scan', code: 'CRT', parent: 'firerate',  pos: [-1.6, -4.1],
     max: 5, base: 140, step: 1.7,  price: { red: 1, white: 0.02 },
     desc: l => `${l * 8}% chance to deal double damage` },
+  { id: 'rocket',      name: 'Rocket Pod',      code: 'RKT', parent: 'multi',     pos: [-4.6, -2.2],
+    max: 6, base: 160, step: 1.7,  price: { red: 1, white: 0.03 },
+    desc: l => `${l} rocket${l > 1 ? 's' : ''} per fight - right-click or Q` },
   { id: 'explosive',   name: 'Volatile Rounds', code: 'BOOM', parent: 'multi',    pos: [-4.6, -3.6],
     max: 4, base: 170, step: 1.85, price: { red: 1, white: 0.03 },
     desc: l => `hits splash ${28 + l * 12}px into the hull` },
@@ -227,6 +230,7 @@ function computeStats() {
     magnet:      150 * (1 + 0.40 * L('magnet')),
     yield:       { red: 1 + 0.2 * L('redYield'), blue: 1 + 0.2 * L('blueYield'), white: 1 },
     whiteBonus:  L('whiteYield'),
+    rockets:     L('rocket'),
   };
 }
 computeStats();
@@ -236,6 +240,7 @@ computeStats();
 // earlier would throw on the temporal dead zone rather than read as undefined.
 let mode = 'title';           // title | hangar | fight | cleared | dead
 let player, boss, shots, flak, orbs, particles, drones, stars, nebulae, beams;
+let rockets = [];
 let runWallet = emptyWallet(), popups = [];
 let elapsed, shake, hitFlash, paused, fireTimer, pulseRing, titleTime;
 
@@ -315,8 +320,14 @@ document.addEventListener('fullscreenchange', releaseAll);
 
 const mouse = { x: W / 2, y: H / 2, down: false };
 window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-window.addEventListener('mousedown', () => { mouse.down = true; });
-window.addEventListener('mouseup', () => { mouse.down = false; });
+let rocketQueued = false;
+window.addEventListener('mousedown', e => {
+  if (e.button === 2) rocketQueued = true;
+  else if (e.button === 0) mouse.down = true;
+});
+window.addEventListener('mouseup', e => { if (e.button === 0) mouse.down = false; });
+// right-click is the rocket button, not the browser menu
+window.addEventListener('contextmenu', e => e.preventDefault());
 
 // ---------- world ----------
 function makeField() {
@@ -346,6 +357,7 @@ function makePlayer() {
                        // hells do it, so a bigger ship is not a harder game.
     hull: S.maxHull, shield: S.maxShield, shieldTimer: 0,
     pulse: 0, maxPulse: 100, invuln: 0, trail: [],
+    rockets: S.rockets, rocketCd: 0,
   };
 }
 
@@ -368,7 +380,7 @@ function makeGun(type, level) {
   // Reloads run about 12% faster than they used to.
   if (type === 'aimed')  g.reload = Math.max(0.5, 1.32 - level * 0.035);
   if (type === 'spread') g.reload = Math.max(1.15, 2.3 - level * 0.045);
-  if (type === 'spiral') g.reload = 0.12;
+  if (type === 'spiral') g.reload = 0.16;   // wider spacing between spiral rounds
   if (type === 'seeker') g.reload = Math.max(1.6, 2.8 - level * 0.055);
   if (type === 'laser')  g.reload = Math.max(2.1, 3.7 - level * 0.06);
   return g;
@@ -397,7 +409,9 @@ function makeBoss(level) {
   const cell = cellSize();
   const midC = (cols - 1) / 2, midR = (rows - 1) / 2;
   const density = 0.58 + Math.min(0.28, level * 0.015);
-  const armourHp = 10 * (3 + Math.floor(level * 0.9) + (guardian ? 2 : 0));
+  // Blocks and core both grow faster per level than they used to, so each
+  // level is a longer fight than the one before.
+  const armourHp = 10 * (4 + Math.floor(level * 1.25) + (guardian ? 3 : 0));
 
   const grid = [];
   for (let r = 0; r < rows; r++) { grid[r] = []; for (let c = 0; c < cols; c++) grid[r][c] = null; }
@@ -417,7 +431,7 @@ function makeBoss(level) {
   // boss.blocks sharing the core's coordinates, and killing that phantom (the
   // pulse and splash damage walk boss.blocks, not the grid) clears the core out
   // of the grid: still drawn, but impossible to hit.
-  const coreHp = 10 * (28 + level * 9) * (guardian ? 2.2 : 1);
+  const coreHp = 10 * (34 + level * 13) * (guardian ? 2.2 : 1);
   const core = put(midR, midC, 'core', Math.round(coreHp));
 
   // Mirrored silhouette, so every boss reads as a built machine rather than noise.
@@ -485,7 +499,7 @@ function startFight(level) {
   const L = clamp(level || save.selected, 1, save.level);
   boss = makeBoss(L);
   boss.firstClear = L === save.level;
-  shots = []; flak = []; orbs = []; particles = []; beams = [];
+  shots = []; flak = []; orbs = []; particles = []; beams = []; rockets = [];
   drones = [];
   for (let i = 0; i < S.drones; i++) drones.push({ phase: (Math.PI * 2 * i) / S.drones, timer: rand(0, 0.5), x: 0, y: 0 });
   runWallet = emptyWallet();
@@ -648,16 +662,16 @@ function runGun(b, dt) {
   g.volley++;
   if (g.type === 'aimed') {
     // a line of three down the same heading: sidestep it
-    [250, 300, 350].forEach(v => addFlak(w.x, w.y, toPlayer, v, 4));
+    [235, 280, 325].forEach(v => addFlak(w.x, w.y, toPlayer, v, 4));
   } else if (g.type === 'spread') {
     // a ring of 10 that alternates by half a gap each volley: stand in a gap
-    const n = 10, base = (g.volley % 2) * (Math.PI / n);
-    for (let i = 0; i < n; i++) addFlak(w.x, w.y, base + (Math.PI * 2 * i) / n, 200, 4);
+    const n = 8, base = (g.volley % 2) * (Math.PI / n);
+    for (let i = 0; i < n; i++) addFlak(w.x, w.y, base + (Math.PI * 2 * i) / n, 185, 4);
   } else if (g.type === 'spiral') {
     // two arms turning at a steady rate: circle with them
-    g.phase += 0.32;
-    addFlak(w.x, w.y, g.phase, 210, 3.5);
-    addFlak(w.x, w.y, g.phase + Math.PI, 210, 3.5);
+    g.phase += 0.3;
+    addFlak(w.x, w.y, g.phase, 195, 3.5);
+    addFlak(w.x, w.y, g.phase + Math.PI, 195, 3.5);
   } else if (g.type === 'seeker') {
     // two slow missiles launched straight up and down, then turning in
     addFlak(w.x, w.y, -Math.PI / 2, 140, 5, '#ff7a1a', 2.2);
@@ -678,6 +692,54 @@ function shotHit(s) {
     if (b && b !== s.last) return b;
   }
   return null;
+}
+
+// Rockets: a limited number per fight (one per Rocket Pod level). Each flies
+// out along your aim, then curves gently onto the nearest block and explodes:
+// roughly one armour block's worth of damage on the block it hits, plus a
+// small splash. Strong, but a handful will not strip a boss on their own.
+function launchRocket() {
+  player.rockets--;
+  player.rocketCd = 0.35;
+  const a = player.angle;
+  rockets.push({
+    x: player.x + Math.cos(a) * player.radius, y: player.y + Math.sin(a) * player.radius,
+    vx: Math.cos(a) * 380, vy: Math.sin(a) * 380, r: 6, age: 0, last: null,
+  });
+  shake = Math.max(shake, 4);
+}
+
+function rocketBlast(x, y, hit) {
+  const L = boss.level;
+  const direct = S.damage * (9 + L * 0.9);          // about one armour block
+  if (hit) damageBlock(hit, direct * (hit.kind === 'core' ? S.coreMult : 1), false, true);
+  splashDamage(x, y, boss.cell * 1.7, direct * 0.35);
+  spawnParticles(x, y, '#7fe9ff', 30, 260);
+  spawnParticles(x, y, '#ffffff', 12, 180);
+  shake = Math.max(shake, 12);
+}
+
+function updateRockets(dt) {
+  rockets = rockets.filter(k => {
+    k.age += dt;
+    // after a short straight launch, steer toward the nearest block
+    if (k.age > 0.18) {
+      const t = nearestBlock(k.x, k.y);
+      if (t) {
+        const want = Math.atan2(t.y - k.y, t.x - k.x), cur = Math.atan2(k.vy, k.vx);
+        const diff = ((want - cur + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+        const na = cur + clamp(diff, -1, 1) * 3.2 * dt;
+        const spd = Math.min(820, Math.hypot(k.vx, k.vy) + 900 * dt);
+        k.vx = Math.cos(na) * spd; k.vy = Math.sin(na) * spd;
+      }
+    }
+    k.px = k.x; k.py = k.y;
+    k.x += k.vx * dt; k.y += k.vy * dt;
+    if (Math.random() < 0.8) particles.push({ x: k.x - k.vx * 0.02, y: k.y - k.vy * 0.02, vx: rand(-30, 30), vy: rand(-30, 30), life: 0.35, age: 0, color: '#7fe9ff', size: rand(1.5, 3) });
+    const hit = shotHit(k);
+    if (hit) { rocketBlast(k.x, k.y, hit); return false; }
+    return k.age < 4 && k.x > -60 && k.x < W + 60 && k.y > -60 && k.y < H + 60;
+  });
 }
 
 function nearestBlock(x, y) {
@@ -781,6 +843,13 @@ function update(dt) {
   if (mouse.down && fireTimer <= 0) { fireTimer = S.fireDelay; firePlayer(); }
 
   // --- pulse ---
+  // --- rockets ---
+  if (player.rocketCd > 0) player.rocketCd -= dt;
+  if ((rocketQueued || keys['q']) && player.rockets > 0 && player.rocketCd <= 0) launchRocket();
+  rocketQueued = false;
+  updateRockets(dt);
+  if (mode !== 'fight') return;   // a rocket just blew the core
+
   if (keys['e'] && player.pulse >= player.maxPulse) {
     player.pulse = 0;
     shake = Math.max(shake, 16);
@@ -871,7 +940,7 @@ function update(dt) {
     f.x += f.vx * dt; f.y += f.vy * dt; f.life -= dt;
   });
   flak = flak.filter(f => {
-    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(18); return false; }
+    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(24); return false; }
     return f.life > 0 && f.x > -40 && f.x < W + 40 && f.y > -40 && f.y < H + 40;
   });
 
@@ -879,7 +948,7 @@ function update(dt) {
   beams.forEach(bm => {
     if (!bm.firing) return;
     const dx = Math.cos(bm.angle), dy = Math.sin(bm.angle);
-    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(16);
+    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(20);
   });
 
   // --- ramming the hull ---
@@ -1343,6 +1412,28 @@ function drawDrop(x, y, vx, vy, r, color, hot) {
   ctx.restore();
 }
 
+function drawRocket(k) {
+  ctx.save();
+  ctx.translate(k.x, k.y);
+  ctx.rotate(Math.atan2(k.vy, k.vx));
+  // exhaust
+  glowOn('#7fe9ff', 16);
+  ctx.fillStyle = 'rgba(127,233,255,0.85)';
+  const fl = rand(10, 18);
+  ctx.beginPath(); ctx.moveTo(-8, -3.5); ctx.lineTo(-8 - fl, 0); ctx.lineTo(-8, 3.5); ctx.closePath(); ctx.fill();
+  // body, nose and fins
+  ctx.fillStyle = '#bff4ff';
+  ctx.fillRect(-9, -3.5, 14, 7);
+  ctx.beginPath(); ctx.moveTo(5, -3.5); ctx.lineTo(12, 0); ctx.lineTo(5, 3.5); ctx.closePath(); ctx.fill();
+  glowOff();
+  ctx.fillStyle = '#3aa8d8';
+  ctx.beginPath(); ctx.moveTo(-9, -3.5); ctx.lineTo(-13, -7.5); ctx.lineTo(-5, -3.5); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-9, 3.5); ctx.lineTo(-13, 7.5); ctx.lineTo(-5, 3.5); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(-2, -1.2, 5, 2.4);
+  ctx.restore();
+}
+
 function drawWorld() {
   ctx.save();
   if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
@@ -1388,6 +1479,7 @@ function drawWorld() {
 
   // our rounds (drones included): light neon-blue teardrops
   shots.forEach(s => drawDrop(s.x, s.y, s.vx, s.vy, s.r, '#7fe9ff', '#f0ffff'));
+  rockets.forEach(drawRocket);
 
   glowOn('#7cffb2', 10);
   ctx.fillStyle = '#7cffb2';
@@ -1443,7 +1535,7 @@ function bar(x, y, w, h, pct, color) {
 
 function drawHUD() {
   // ship panel, top left
-  const rows = S.maxShield > 0 ? 3 : 2;
+  const rows = 2 + (S.maxShield > 0 ? 1 : 0) + (S.rockets > 0 ? 1 : 0);
   panel(14, 14, 318, 22 + rows * 28);
   let y = 30;
   const row = (label, pct, color, text) => {
@@ -1465,6 +1557,19 @@ function drawHUD() {
   row('HULL', player.hull / S.maxHull, '#4dff88', `${Math.ceil(player.hull)} / ${S.maxHull}`);
   if (S.maxShield > 0) row('SHLD', player.shield / S.maxShield, '#7fd8ff', `${Math.ceil(player.shield)} / ${S.maxShield}`);
   row('PULSE', player.pulse / player.maxPulse, '#9ff7ff', player.pulse >= player.maxPulse ? 'PRESS E' : null);
+  if (S.rockets > 0) {
+    ctx.textAlign = 'left';
+    ctx.font = font(9);
+    ctx.fillStyle = '#cfe9e4';
+    ctx.fillText('RKTS', 28, y + 13);
+    for (let i = 0; i < S.rockets; i++) {
+      ctx.fillStyle = i < player.rockets ? '#7fe9ff' : 'rgba(127,233,255,0.18)';
+      const rx = 100 + i * 24;
+      ctx.fillRect(rx, y + 5, 14, 8);
+      ctx.beginPath(); ctx.moveTo(rx + 14, y + 5); ctx.lineTo(rx + 20, y + 9); ctx.lineTo(rx + 14, y + 13); ctx.closePath(); ctx.fill();
+    }
+    y += 28;
+  }
 
   // fight panel, top right: which fight, how sealed, and this run's haul
   const pw = 262, x0 = W - pw - 14;
@@ -1488,7 +1593,7 @@ function drawHUD() {
   ctx.textAlign = 'left';
   ctx.font = font(7);
   ctx.fillStyle = 'rgba(207,233,228,0.55)';
-  ctx.fillText('WASD MOVE   MOUSE AIM   CLICK FIRE   E PULSE   P PAUSE   F FULLSCREEN', 18, H - 16);
+  ctx.fillText('WASD MOVE   MOUSE AIM   CLICK FIRE   RIGHT-CLICK/Q ROCKET   E PULSE   P PAUSE   F FULLSCREEN', 18, H - 16);
 }
 
 function drawPaused() {

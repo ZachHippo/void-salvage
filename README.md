@@ -14,6 +14,7 @@ before the next fight. No build step, no libraries, no network calls.
 | Aim | mouse |
 | Fire | click, or hold to keep firing |
 | Pulse | `E`, once the pulse bar is full |
+| Rocket | right-click or `Q` (needs the Rocket Pod upgrade) |
 | Pause | `P` or `Esc` |
 | Fullscreen | `F`, or the button on any menu screen |
 | Launch (hangar) | `Enter`, or click LAUNCH |
@@ -58,10 +59,11 @@ and roughly double core health.
 
 ## Upgrades
 
-The hangar is an upgrade tree rooted at FIGHT, with 27 nodes across four branches:
+The hangar is an upgrade tree rooted at FIGHT, with 28 nodes across four branches:
 
-- **Weapons** (up) -- damage, fire rate, bullet speed, split barrel, crits,
-  penetrator rounds, ricochet, seekers, volatile rounds, and bonus damage to
+- **Weapons** (up) -- damage, fire rate, bullet speed, split barrel, rocket pod
+  (one rocket per fight per level), crits, penetrator rounds, ricochet, seekers,
+  volatile rounds, and bonus damage to
   gun blocks and cores
 - **Defence** (left) -- plating, nanite repair, deflector shields, faster
   recharge, longer invulnerability after a hit
