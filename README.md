@@ -27,9 +27,9 @@ Each level builds a boss out of blocks on a rotating grid. Three kinds:
 - **Armour** (purple) -- bulk. It is what seals the core.
 - **Guns** (orange) -- each one runs a fire pattern. Destroy it and that pattern
   stops for good, so what you shoot first shapes the whole fight.
-- **Core** (cyan) -- sealed and immune until the armour is 80% gone. Once it is
-  exposed your rounds fly straight through the remaining blocks and hit it.
-  Blow it to clear the level.
+- **Core** (cyan) -- shielded by the blocks around it. Tunnel in: any round
+  that reaches the core damages it, and once a neighbouring block is gone it
+  is exposed to splash and the pulse too. Blow it to clear the level.
 
 Clearing a level for the first time is the only way to earn white crystals.
 You can go back and replay any level you have unlocked for more red and blue,
@@ -42,14 +42,15 @@ picked up**, which is the whole risk.
 
 ## Gun patterns
 
-They unlock as the levels climb, so early bosses are readable and late ones are not.
+They unlock as the levels climb. Every pattern is fixed and repeats, and each
+level always builds the same boss, so a barrage can be learned and dodged.
 
 | Pattern | From | Behaviour |
 | --- | --- | --- |
-| Aimed | 1 | single shot straight at you |
-| Spread | 3 | eight-way radial burst |
-| Spiral | 5 | continuous rotating stream |
-| Seeker | 7 | slow homing missile |
+| Aimed | 1 | a line of three rounds down one heading -- sidestep it |
+| Spread | 3 | a ring of ten that shifts half a gap each volley -- sit in a gap |
+| Spiral | 5 | two arms turning at a steady rate -- circle with them |
+| Seeker | 7 | two slow homing missiles, launched up and down |
 | Laser | 9 | telegraphed beam -- thin line while charging, then it fires |
 
 Bosses grow with the level, and every 5th is a **Guardian**: bigger, more guns,

@@ -361,7 +361,10 @@ const GUN_UNLOCK = [
 ];
 
 function makeGun(type, level) {
-  const g = { type, timer: rand(0.4, 2), phase: rand(0, Math.PI * 2), state: 'idle', charge: 0 };
+  // No randomness: guns of a type fire together on a fixed beat, each type
+  // offset from the others, so a boss's barrage repeats and can be learned.
+  const offset = { aimed: 0, spread: 0.45, spiral: 0, seeker: 0.9, laser: 1.35 }[type];
+  const g = { type, timer: 1.2 + offset, phase: 0, volley: 0, state: 'idle', charge: 0 };
   // Reloads run about 12% faster than they used to.
   if (type === 'aimed')  g.reload = Math.max(0.5, 1.32 - level * 0.035);
   if (type === 'spread') g.reload = Math.max(1.15, 2.3 - level * 0.045);
@@ -371,7 +374,23 @@ function makeGun(type, level) {
   return g;
 }
 
+// Small seeded PRNG (mulberry32). Each level builds its boss from the same seed,
+// so a level is always the same machine with the same guns and patterns --
+// something you can learn and come back to beat.
+function seededRandom(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function makeBoss(level) {
+  const rng = seededRandom(level * 7919 + 17);
+  const rr = (a, b) => a + rng() * (b - a);
   const guardian = level % 5 === 0;
   const cols = oddClamp(5 + 2 * Math.floor((level - 1) / 3) + (guardian ? 2 : 0), 5, 13);
   const rows = oddClamp(5 + 2 * Math.floor((level - 1) / 4), 5, 11);
@@ -386,7 +405,7 @@ function makeBoss(level) {
 
   function put(r, c, kind, hp) {
     if (grid[r][c]) return null;
-    const b = { r, c, kind, hp, maxHp: hp, alive: true, flash: 0, gun: null, seed: Math.random() };
+    const b = { r, c, kind, hp, maxHp: hp, alive: true, flash: 0, gun: null, seed: rng() };
     grid[r][c] = b;
     blocks.push(b);
     return b;
@@ -406,7 +425,7 @@ function makeBoss(level) {
     for (let c = 0; c <= Math.floor(cols / 2); c++) {
       const nx = (c - midC) / (cols / 2), ny = (r - midR) / (rows / 2);
       const d = Math.hypot(nx, ny);
-      if (!(d < 0.5 || Math.random() < density * (1 - d * 0.55))) continue;
+      if (!(d < 0.5 || rng() < density * (1 - d * 0.55))) continue;
       put(r, c, 'armour', armourHp);
       const mc = cols - 1 - c;
       if (mc !== c) put(r, mc, 'armour', armourHp);
@@ -417,7 +436,7 @@ function makeBoss(level) {
   const gunCount = Math.min(11, 2 + Math.floor(level / 2) + (guardian ? 3 : 0));
   const pool = blocks
     .filter(b => b.kind === 'armour')
-    .sort((a, b) => (Math.hypot(b.c - midC, b.r - midR) - Math.hypot(a.c - midC, a.r - midR)) + rand(-0.9, 0.9));
+    .sort((a, b) => (Math.hypot(b.c - midC, b.r - midR) - Math.hypot(a.c - midC, a.r - midR)) + rr(-0.9, 0.9));
   const open = GUN_UNLOCK.filter(u => level >= u.from);
   for (let i = 0; i < Math.min(gunCount, pool.length); i++) {
     const b = pool[i];
@@ -429,8 +448,8 @@ function makeBoss(level) {
   const armourTotal = blocks.filter(b => b.kind !== 'core').length;
   return {
     x: W / 2, y: H * 0.34, angle: 0,
-    spin: (Math.random() < 0.5 ? -1 : 1) * (0.10 + level * 0.012),
-    t: rand(0, 10), cols, rows, cell, grid, blocks, core, level, guardian,
+    spin: (rng() < 0.5 ? -1 : 1) * (0.10 + level * 0.012),
+    t: 0, cols, rows, cell, grid, blocks, core, level, guardian,
     armourTotal, armourLeft: armourTotal, sealed: true,
   };
 }
@@ -528,12 +547,24 @@ function breakBlock(b) {
     return;
   }
   boss.armourLeft--;
-  if (boss.armourLeft <= boss.armourTotal * 0.2) boss.sealed = false;
 }
 
-function damageBlock(b, dmg, crit) {
+// `direct` is true for a round that physically struck the block. A round that
+// reaches the core has, by definition, found a way in, so it always does damage;
+// splash and the pulse only hurt the core once a neighbouring block is gone.
+// The core is exposed once any of its four neighbouring cells is empty -- there
+// is a way in. Until then it is shielded, drawn dimmed, and immune to splash.
+function coreExposed() {
+  const { r, c } = boss.core;
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dr, dc]) => {
+    const rr = r + dr, cc = c + dc;
+    return rr < 0 || cc < 0 || rr >= boss.rows || cc >= boss.cols || !boss.grid[rr][cc];
+  });
+}
+
+function damageBlock(b, dmg, crit, direct) {
   if (!b.alive) return;
-  if (b.kind === 'core' && boss.sealed) { b.flash = 0.08; return; }
+  if (b.kind === 'core' && boss.sealed && !direct) { b.flash = 0.08; return; }
   b.hp -= dmg;
   b.flash = 0.1;
   // Arcade-style damage numbers, capped so a drone swarm cannot flood the screen.
@@ -612,21 +643,25 @@ function runGun(b, dt) {
 
   if (g.timer > 0) return;
   g.timer = g.reload;
-  // Every enemy round is a big orange bolt, so danger reads at a glance.
+  // Fixed patterns in screen space (not tied to the boss's spin), so each
+  // volley looks the same every time and always leaves a way through.
+  g.volley++;
   if (g.type === 'aimed') {
-    // a pair, widening to a three-round fan from level 6
-    const offs = boss.level >= 6 ? [-0.14, 0, 0.14] : [-0.08, 0.08];
-    offs.forEach(o => addFlak(w.x, w.y, toPlayer + o, 285, 7));
+    // a line of three down the same heading: sidestep it
+    [250, 300, 350].forEach(v => addFlak(w.x, w.y, toPlayer, v, 4));
   } else if (g.type === 'spread') {
-    const n = 10;
-    for (let i = 0; i < n; i++) addFlak(w.x, w.y, outward + (Math.PI * 2 * i) / n, 215, 7);
+    // a ring of 10 that alternates by half a gap each volley: stand in a gap
+    const n = 10, base = (g.volley % 2) * (Math.PI / n);
+    for (let i = 0; i < n; i++) addFlak(w.x, w.y, base + (Math.PI * 2 * i) / n, 200, 4);
   } else if (g.type === 'spiral') {
-    g.phase += 0.55;
-    addFlak(w.x, w.y, g.phase, 220, 6);
-    addFlak(w.x, w.y, g.phase + Math.PI, 220, 6);   // two arms
+    // two arms turning at a steady rate: circle with them
+    g.phase += 0.32;
+    addFlak(w.x, w.y, g.phase, 210, 3.5);
+    addFlak(w.x, w.y, g.phase + Math.PI, 210, 3.5);
   } else if (g.type === 'seeker') {
-    addFlak(w.x, w.y, outward - 0.4, 140, 8, '#ff7a1a', 2.2);
-    addFlak(w.x, w.y, outward + 0.4, 140, 8, '#ff7a1a', 2.2);
+    // two slow missiles launched straight up and down, then turning in
+    addFlak(w.x, w.y, -Math.PI / 2, 140, 5, '#ff7a1a', 2.2);
+    addFlak(w.x, w.y, Math.PI / 2, 140, 5, '#ff7a1a', 2.2);
   }
 }
 
@@ -637,16 +672,6 @@ function runGun(b, dt) {
 function shotHit(s) {
   const px = s.px === undefined ? s.x : s.px, py = s.py === undefined ? s.y : s.py;
   const dx = s.x - px, dy = s.y - py, len = Math.hypot(dx, dy);
-  // Once the core is exposed, rounds pass straight through the remaining
-  // blocks and only the core stops them. It gets a generous round hitbox about
-  // the size of its inner halo, because it is a single small cell on a moving
-  // boss and a round aimed at it would often arrive just after it moved.
-  if (!boss.sealed) {
-    if (!boss.core.alive || boss.core === s.last) return null;
-    const c = blockWorld(boss.core);
-    const d = len > 0 ? distToRay(c.x, c.y, px, py, dx / len, dy / len, len) : dist(c.x, c.y, s.x, s.y);
-    return d < boss.cell * 0.95 + s.r ? boss.core : null;
-  }
   const steps = Math.max(1, Math.ceil(len / (boss.cell * 0.3)));
   for (let i = 1; i <= steps; i++) {
     const b = blockAtWorld(px + (dx * i) / steps, py + (dy * i) / steps);
@@ -656,7 +681,6 @@ function shotHit(s) {
 }
 
 function nearestBlock(x, y) {
-  if (!boss.sealed && boss.core.alive) return blockWorld(boss.core);   // seekers and drones go for it too
   let best = null, bd = Infinity;
   boss.blocks.forEach(b => {
     if (!b.alive) return;
@@ -781,6 +805,7 @@ function update(dt) {
   boss.x = W / 2 + Math.sin(boss.t * 0.33) * swayX;
   boss.y = midY + Math.sin(boss.t * 0.51) * swayY;
   boss.angle += boss.spin * dt;
+  boss.sealed = !coreExposed();
   boss.blocks.forEach(b => {
     if (!b.alive) return;
     if (b.flash > 0) b.flash -= dt;
@@ -822,7 +847,7 @@ function update(dt) {
       let dmg = s.dmg * (hit.kind === 'gun' ? S.gunMult : hit.kind === 'core' ? S.coreMult : 1);
       const crit = Math.random() < S.crit;
       if (crit) dmg *= 2;
-      damageBlock(hit, dmg, crit);
+      damageBlock(hit, dmg, crit, true);
       if (S.splash) splashDamage(s.x, s.y, S.splash, s.dmg * 0.5);
       spawnParticles(s.x, s.y, '#7fe9ff', 5, 90);
       // a penetrator round keeps going, but never re-hits the block it is inside
@@ -846,7 +871,7 @@ function update(dt) {
     f.x += f.vx * dt; f.y += f.vy * dt; f.life -= dt;
   });
   flak = flak.filter(f => {
-    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(11); return false; }
+    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(18); return false; }
     return f.life > 0 && f.x > -40 && f.x < W + 40 && f.y > -40 && f.y < H + 40;
   });
 
@@ -1275,6 +1300,49 @@ function drawShip() {
   ctx.restore();
 }
 
+// #rrggbb with an alpha, for gradients that fade a colour out.
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
+
+// A teardrop round: a glowing head, a tail that tapers and fades back along
+// its flight, a hot inner core and a thin highlight streak for texture.
+function drawDrop(x, y, vx, vy, r, color, hot) {
+  const L = r * 3.4;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Math.atan2(vy, vx));
+
+  const g = ctx.createLinearGradient(-L, 0, r, 0);
+  g.addColorStop(0, hexA(color, 0));
+  g.addColorStop(0.55, hexA(color, 0.85));
+  g.addColorStop(1, color);
+  glowOn(color, r * 2.2);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(-L, 0);
+  ctx.quadraticCurveTo(-r * 0.9, -r * 1.05, 0, -r);
+  ctx.arc(0, 0, r, -Math.PI / 2, Math.PI / 2);
+  ctx.quadraticCurveTo(-r * 0.9, r * 1.05, -L, 0);
+  ctx.closePath();
+  ctx.fill();
+  glowOff();
+
+  // hot core, set a little forward in the head
+  ctx.fillStyle = hot;
+  ctx.beginPath(); ctx.ellipse(r * 0.18, 0, r * 0.55, r * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+
+  // highlight streak along the upper flank
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = Math.max(1, r * 0.2);
+  ctx.beginPath();
+  ctx.moveTo(-L * 0.55, -r * 0.3);
+  ctx.quadraticCurveTo(-r * 0.35, -r * 0.62, r * 0.4, -r * 0.5);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawWorld() {
   ctx.save();
   if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
@@ -1315,18 +1383,11 @@ function drawWorld() {
 
   orbs.forEach(o => currencyIcon(o.x, o.y, o.cur, 2));
 
-  // enemy rounds: big glowing orange bolts
-  flak.forEach(f => {
-    glowOn(f.color, 14);
-    ctx.fillStyle = f.color;
-    ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 1.3 + 1, 0, Math.PI * 2); ctx.fill();
-  });
-  glowOff();
+  // enemy rounds: orange teardrops
+  flak.forEach(f => drawDrop(f.x, f.y, f.vx, f.vy, f.r + 1.5, f.color, '#fff1c9'));
 
-  // our rounds (drones included): light neon blue
-  glowOn('#7fe9ff', 12);
-  ctx.fillStyle = '#7fe9ff';
-  shots.forEach(s => { ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill(); });
+  // our rounds (drones included): light neon-blue teardrops
+  shots.forEach(s => drawDrop(s.x, s.y, s.vx, s.vy, s.r, '#7fe9ff', '#f0ffff'));
 
   glowOn('#7cffb2', 10);
   ctx.fillStyle = '#7cffb2';
@@ -1414,7 +1475,7 @@ function drawHUD() {
   ctx.fillText(levelName(boss.level) + (boss.firstClear ? '' : ' - REPLAY'), x0 + pw / 2, 42);
   ctx.font = font(8);
   ctx.fillStyle = boss.sealed ? '#7fb2ff' : '#9ff7ff';
-  ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}%` : 'CORE EXPOSED!', x0 + pw / 2, 64);
+  ctx.fillText(boss.sealed ? `ARMOUR ${Math.round((boss.armourLeft / boss.armourTotal) * 100)}% - CORE SHIELDED` : 'CORE EXPOSED - HIT IT!', x0 + pw / 2, 64);
   CUR_ORDER.forEach((k, i) => {
     const cx = x0 + 26 + i * 80;
     currencyIcon(cx, 96, k, 3);
