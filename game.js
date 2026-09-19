@@ -873,10 +873,10 @@ function hurtPlayer(amount) {
 }
 
 // ---------- boss hunting ----------
-// The boss hunts you in a loop: it sits and tracks you, charges up while its
-// head locks on (a warning line shows the aim), dashes at where you are --
+// The boss hunts you in a loop: it sits and tracks you, charges up while it
+// locks on (a warning line shows the aim), dashes at where you are --
 // bending toward you as it goes -- then pulls up short and sits again. Its
-// front, marked by the face, always shows where it is aimed.
+// aim is always shown by the arrow over its core.
 function bossAI(dt, ext) {
   const ai = boss.ai;
   ai.t -= dt;
@@ -1302,70 +1302,43 @@ function drawBlockFilled(b, s, h, base, sealed, frac) {
   }
 }
 
-// Where the boss's face sits: the front edge (local +x) of the blocks nearest
-// its centre line, so it reads as a head on whatever shape the boss is.
-function bossHeadX() {
-  // the centre column first, so the face sits on a block rather than in a gap
-  for (const band of [0.5, 1.01]) {
-    let fx = -Infinity;
-    boss.blocks.forEach(b => {
-      if (!b.alive) return;
-      const l = blockLocal(b);
-      if (Math.abs(l.y) <= boss.cell * band && l.x > fx) fx = l.x;
-    });
-    if (fx > -Infinity) return fx;
-  }
-  return blockLocal(boss.core).x;
-}
-
-// Drawn in the boss's rotated frame. Calm cyan eyes while it sits, orange and
-// flickering while it charges, red while it dashes.
-function drawBossHead() {
-  const c = boss.cell * 1.35, fx = bossHeadX();
+// The aiming arrow, drawn over the core in the boss's rotated frame, so it
+// always points where the boss is aimed (local +x). It runs past the core's
+// own cell so it stays readable when the core is buried in armour. Calm white
+// while the boss sits, flickering orange while it charges, red while it dashes.
+function drawCoreArrow() {
+  const c = boss.cell, l = blockLocal(boss.core);
   const st = boss.ai ? boss.ai.state : 'sit';
-  const col = victory ? '#555c66' : st === 'dash' ? '#ff3b3b' : st === 'charge' ? '#ff9a1f' : '#dff7ff';
+  const col = st === 'dash' ? '#ff3b3b' : st === 'charge' ? '#ff9a1f' : '#eaf6ff';
   const lit = st === 'charge' ? 0.55 + 0.45 * Math.sin(elapsed * 34) : 1;
-
-  // visor along the front edge
-  glowOn(col, st === 'sit' ? 10 : 24);
-  ctx.strokeStyle = col;
+  ctx.save();
+  ctx.translate(l.x, l.y);
   ctx.globalAlpha = lit;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(fx + c * 0.46, -c * 0.62);
-  ctx.lineTo(fx + c * 0.56, 0);
-  ctx.lineTo(fx + c * 0.46, c * 0.62);
-  ctx.stroke();
-
-  // eyes, looking forward
+  glowOn(col, st === 'sit' ? 10 : 24);
   ctx.fillStyle = col;
-  for (const side of [-1, 1]) {
-    const ex = fx + c * 0.12, ey = side * c * 0.26;
-    ctx.beginPath(); ctx.ellipse(ex, ey, c * 0.13, c * 0.1, 0, 0, Math.PI * 2); ctx.fill();
-  }
+  ctx.beginPath();
+  ctx.moveTo(c * 1.05, 0);                 // tip
+  ctx.lineTo(c * 0.45, -c * 0.42);
+  ctx.lineTo(c * 0.45, -c * 0.14);
+  ctx.lineTo(-c * 0.42, -c * 0.14);        // tail
+  ctx.lineTo(-c * 0.42, c * 0.14);
+  ctx.lineTo(c * 0.45, c * 0.14);
+  ctx.lineTo(c * 0.45, c * 0.42);
+  ctx.closePath();
+  ctx.fill();
   glowOff();
-  ctx.fillStyle = '#10141c';
-  for (const side of [-1, 1]) {
-    ctx.beginPath(); ctx.arc(fx + c * 0.19, side * c * 0.26, c * 0.05, 0, Math.PI * 2); ctx.fill();
-  }
-  // brows: the inner ends pushed forward, so the face scowls ahead
-  ctx.strokeStyle = col;
-  ctx.lineWidth = 2.5;
-  for (const side of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(fx + c * 0.04, side * c * 0.1);
-    ctx.lineTo(fx - c * 0.14, side * c * 0.44);
-    ctx.stroke();
-  }
-  ctx.globalAlpha = 1;
+  ctx.strokeStyle = 'rgba(10,14,22,0.7)';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.restore();
 }
 
-// While charging, a warning line runs from the face to the ship and firms up
+// While charging, a warning line runs from the core's arrow to the ship and firms up
 // as the dash gets closer.
 function drawChargeLine() {
   if (!boss.ai || boss.ai.state !== 'charge' || victory) return;
-  const fx = bossHeadX() + boss.cell * 0.6;
-  const hx = boss.x + Math.cos(boss.angle) * fx, hy = boss.y + Math.sin(boss.angle) * fx;
+  const core = blockWorld(boss.core);   // starts from the arrow's tip
+  const hx = core.x + Math.cos(boss.angle) * boss.cell * 1.1, hy = core.y + Math.sin(boss.angle) * boss.cell * 1.1;
   const total = boss.guardian ? 0.75 : 0.95, k = 1 - boss.ai.t / total;
   ctx.save();
   ctx.setLineDash([10, 8]);
@@ -1404,7 +1377,7 @@ function drawBoss() {
     ctx.restore();
   });
 
-  if (boss.core.alive || boss.blocks.some(b => b.alive)) drawBossHead();
+  if (boss.core.alive && !victory) drawCoreArrow();
 
   // An exposed core gets a halo, so it reads as the target from across the arena.
   if (boss.core.alive && !boss.sealed) {

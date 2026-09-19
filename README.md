@@ -39,8 +39,8 @@ and the bigger the boss, the bigger the payout.
 
 The boss hunts you: it sits and tracks you, charges up while a warning line
 locks onto your ship, dashes at you (bending toward you as it goes), then pulls
-up and sits again. Its face marks the front -- calm while it sits, orange while
-it charges, red while it dashes. Aimed guns lead your movement, so change
+up and sits again. An arrow over its core shows where it is aimed -- white while it sits,
+orange while it charges, red while it dashes. Aimed guns lead your movement, so change
 direction rather than drifting.
 
 When the core blows, the rest of the boss shatters in a chain reaction and every
