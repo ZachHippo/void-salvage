@@ -136,7 +136,7 @@ const UPGRADES = [
     desc: l => `+${l * 30}% damage to the core` },
   { id: 'multi',       name: 'Split Barrel',    code: 'x2',  parent: 'firerate',  pos: [-3.1, -3.1],
     max: 4, base: 130, step: 1.85, price: { red: 1, white: 0.03 },
-    desc: l => `+${l} projectile${l > 1 ? 's' : ''} per shot` },
+    desc: l => `+${l} projectile${l > 1 ? 's' : ''} per shot, each at 70% damage` },
   { id: 'crit',        name: 'Weak Point Scan', code: 'CRT', parent: 'firerate',  pos: [-1.6, -4.1],
     max: 5, base: 140, step: 1.7,  price: { red: 1, white: 0.02 },
     desc: l => `${l * 8}% chance to deal double damage` },
@@ -208,7 +208,7 @@ function isUnlocked(up) { return !up.parent || lvlOf(up.parent) > 0; }
 // A price is a weight per currency, scaled by the level curve. Every currency an
 // upgrade needs costs at least 1, so a white-crystal line never becomes free.
 function costOf(up, level) {
-  const scale = up.base * Math.pow(up.step, level);
+  const scale = up.base * 2 * Math.pow(up.step + 0.1, level);
   const cost = {};
   for (const k in up.price) cost[k] = Math.max(1, Math.round(scale * up.price[k]));
   return cost;
@@ -219,7 +219,7 @@ let S = {};
 function computeStats() {
   const L = lvlOf;
   S = {
-    damage:      Math.round(10 * (1 + 0.25 * L('damage'))),
+    damage:      6 * (1 + 0.25 * L('damage')),
     fireDelay:   0.15 / (1 + 0.16 * L('firerate')),
     shotSpeed:   760 * (1 + 0.15 * L('velocity')),
     shots:       1 + L('multi'),
@@ -392,12 +392,11 @@ function makeGun(type, level) {
   // offset from the others, so a boss's barrage repeats and can be learned.
   const offset = { aimed: 0, spread: 0.45, spiral: 0, seeker: 0.9, laser: 1.35 }[type];
   const g = { type, timer: 1.2 + offset, phase: 0, volley: 0, state: 'idle', charge: 0 };
-  // Reloads run about 12% faster than they used to.
-  if (type === 'aimed')  g.reload = Math.max(0.5, 1.32 - level * 0.035);
-  if (type === 'spread') g.reload = Math.max(1.15, 2.3 - level * 0.045);
+  if (type === 'aimed')  g.reload = Math.max(0.6, 1.5 - level * 0.035);
+  if (type === 'spread') g.reload = Math.max(1.35, 2.65 - level * 0.045);
   if (type === 'spiral') g.reload = 0.16;   // wider spacing between spiral rounds
-  if (type === 'seeker') g.reload = Math.max(1.6, 2.8 - level * 0.055);
-  if (type === 'laser')  g.reload = Math.max(2.1, 3.7 - level * 0.06);
+  if (type === 'seeker') g.reload = Math.max(1.85, 3.2 - level * 0.055);
+  if (type === 'laser')  g.reload = Math.max(2.4, 4.2 - level * 0.06);
   return g;
 }
 
@@ -428,7 +427,7 @@ function makeBoss(level) {
   const density = 0.58 + Math.min(0.28, level * 0.015);
   // Blocks and core both grow faster per level than they used to, so each
   // level is a longer fight than the one before.
-  const armourHp = Math.round(10 * (6 + level * 2.2 + level * level * 0.06 + (guardian ? 4 : 0)));
+  const armourHp = Math.round(10 * (5 + level * 3 + level * level * 0.08 + (guardian ? 5 : 0)));
 
   const grid = [];
   for (let r = 0; r < rows; r++) { grid[r] = []; for (let c = 0; c < cols; c++) grid[r][c] = null; }
@@ -448,7 +447,7 @@ function makeBoss(level) {
   // boss.blocks sharing the core's coordinates, and killing that phantom (the
   // pulse and splash damage walk boss.blocks, not the grid) clears the core out
   // of the grid: still drawn, but impossible to hit.
-  const coreHp = 10 * (60 + level * 24 + level * level * 0.5) * (final ? 3 : guardian ? 2.2 : 1);
+  const coreHp = 10 * (40 + level * 30 + level * level * 0.7) * (final ? 3 : guardian ? 1.7 : 1);
   const core = put(midR, midC, 'core', Math.round(coreHp));
 
   if (final) {
@@ -484,7 +483,7 @@ function makeBoss(level) {
   }
 
   // Guns replace armour blocks, preferring the outside where you can reach them.
-  const gunCount = final ? 14 : Math.min(11, 2 + Math.floor(level / 2) + (guardian ? 3 : 0));
+  const gunCount = final ? 12 : Math.min(9, 1 + Math.floor(level / 3) + (guardian ? 2 : 0));
   const pool = blocks
     .filter(b => b.kind === 'armour')
     .sort((a, b) => (Math.hypot(b.c - midC, b.r - midR) - Math.hypot(a.c - midC, a.r - midR)) + rr(-0.9, 0.9));
@@ -507,7 +506,7 @@ function makeBoss(level) {
     // what its fire and its body do to you, growing with the level
     shotDmg: Math.round(26 + level * 1.4), beamDmg: Math.round(22 + level * 1.3),
     ramDmg: Math.round(28 + level * 1.8),
-    t: 0, cols, rows, cell, grid, blocks, core, level, guardian, final,
+    t: 0, cols, rows, cell, grid, blocks, core, level, guardian, final, armourHp,
     armourTotal, armourLeft: armourTotal, sealed: true,
   };
 }
@@ -564,7 +563,7 @@ function spawnParticles(x, y, color, count, speed = 120) {
 // Rewards climb steeply with the level: each level is worth 15% more than the
 // one before on top of the linear growth, so a level-20 boss pays roughly 80x
 // a level-1 boss and replaying hard levels is the way to farm.
-function rewardScale(L) { return Math.pow(1.15, L - 1); }
+function rewardScale(L) { return 1 + 0.15 * (L - 1); }
 
 // What a block pays when it breaks: a list of { cur, n orbs, value each }.
 function blockPayout(b) {
@@ -813,8 +812,7 @@ function launchRocket() {
 }
 
 function rocketBlast(x, y, hit) {
-  const L = boss.level;
-  const direct = S.damage * (9 + L * 0.9);          // about one armour block
+  const direct = boss.armourHp * (1 + 0.1 * lvlOf('damage'));   // about one armour block
   if (hit) damageBlock(hit, direct * (hit.kind === 'core' ? S.coreMult : 1), false, true);
   splashDamage(x, y, boss.cell * 1.7, direct * 0.35);
   spawnParticles(x, y, '#7fe9ff', 30, 260);
@@ -849,6 +847,9 @@ function nearestBlock(x, y) {
   return best;
 }
 
+// With Split Barrel each round in the fan does 70% damage: more total output,
+// but not a straight multiplier.
+const SPLIT_DMG = 0.7;
 function firePlayer() {
   const spread = 0.09;
   for (let i = 0; i < S.shots; i++) {
@@ -858,7 +859,7 @@ function firePlayer() {
       x: player.x + Math.cos(a) * player.radius,
       y: player.y + Math.sin(a) * player.radius,
       vx: Math.cos(a) * S.shotSpeed, vy: Math.sin(a) * S.shotSpeed,
-      r: 5, dmg: S.damage, pierce: S.pierce, last: null,
+      r: 5, dmg: S.damage * (S.shots > 1 ? SPLIT_DMG : 1), pierce: S.pierce, last: null,
     });
   }
 }
@@ -988,6 +989,52 @@ function drawPoisonWarning() {
   ctx.fillText('POISON - GET BACK INSIDE THE RING', W / 2, H - 52);
   glowOff();
   ctx.textAlign = 'left';
+}
+
+// Push the ship out of any block it overlaps, working in the boss's rotated
+// frame where blocks are plain squares. Velocity into a block is cancelled, so
+// you slide along the hull rather than through it. Returns the world-space
+// push direction when there was contact, otherwise null.
+function collideBoss() {
+  const R = player.hitRadius + 4, half = boss.cell / 2;
+  const cos = Math.cos(boss.angle), sin = Math.sin(boss.angle);
+  let dx = player.x - boss.x, dy = player.y - boss.y;
+  let lx = dx * cos + dy * sin, ly = -dx * sin + dy * cos;
+  let hit = null;
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    const c0 = Math.round(lx / boss.cell + (boss.cols - 1) / 2), r0 = Math.round(ly / boss.cell + (boss.rows - 1) / 2);
+    for (let r = r0 - 1; r <= r0 + 1; r++) {
+      for (let c = c0 - 1; c <= c0 + 1; c++) {
+        if (r < 0 || c < 0 || r >= boss.rows || c >= boss.cols) continue;
+        const b = boss.grid[r][c];
+        if (!b || !b.alive) continue;
+        const bl = blockLocal(b);
+        const qx = clamp(lx, bl.x - half, bl.x + half), qy = clamp(ly, bl.y - half, bl.y + half);
+        let nx = lx - qx, ny = ly - qy, d = Math.hypot(nx, ny), push;
+        if (d >= R) continue;
+        if (d > 0.001) { nx /= d; ny /= d; push = R - d; }
+        else {
+          // centre inside the block: leave by the shallowest side
+          const ox = lx - bl.x, oy = ly - bl.y;
+          if (half - Math.abs(ox) < half - Math.abs(oy)) { nx = Math.sign(ox) || 1; ny = 0; push = half - Math.abs(ox) + R; }
+          else { nx = 0; ny = Math.sign(oy) || 1; push = half - Math.abs(oy) + R; }
+        }
+        lx += nx * push; ly += ny * push;
+        const wx = nx * cos - ny * sin, wy = nx * sin + ny * cos;
+        const vn = player.vx * wx + player.vy * wy;
+        if (vn < 0) { player.vx -= vn * wx; player.vy -= vn * wy; }
+        hit = { x: wx, y: wy };
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  if (hit) {
+    player.x = clamp(boss.x + lx * cos - ly * sin, player.radius, W - player.radius);
+    player.y = clamp(boss.y + lx * sin + ly * cos, player.radius, H - player.radius);
+  }
+  return hit;
 }
 
 function update(dt) {
@@ -1133,10 +1180,10 @@ function update(dt) {
     if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(boss.beamDmg);
   });
 
-  // --- ramming the hull ---
-  if (!victory && player.invuln <= 0 && blockAtWorld(player.x, player.y)) {
-    const a = Math.atan2(player.y - boss.y, player.x - boss.x);
-    player.vx = Math.cos(a) * 460; player.vy = Math.sin(a) * 460;
+  // --- the hull is solid: you cannot fly through it, and touching it hurts ---
+  const bump = collideBoss();
+  if (bump && !victory && player.invuln <= 0) {
+    player.vx += bump.x * 260; player.vy += bump.y * 260;
     // a dashing boss hits much harder than one you bump into
     hurtPlayer(boss.ai.state === 'dash' ? boss.ramDmg * 1.6 : boss.ramDmg);
   }
