@@ -81,6 +81,8 @@ function normalizeSave(s) {
   if (!s.selected || s.selected > top || s.selected < 1) s.selected = top;
   return s;
 }
+// Numbers on screen get thousands separators: 200000 -> 200,000.
+function fmt(n) { return Number(n).toLocaleString("en-US", { maximumFractionDigits: 1 }); }
 function levelName(L) { return L === MAX_LEVEL ? 'FINAL BOSS' : L % 5 === 0 ? `GUARD ${L / 5}` : `LEVEL ${L}`; }
 
 let save = loadSave();
@@ -629,7 +631,7 @@ function damageBlock(b, dmg, crit, direct) {
   // Arcade-style damage numbers, capped so a drone swarm cannot flood the screen.
   if (popups.length < 70) {
     const w = blockWorld(b);
-    popups.push({ x: w.x + rand(-6, 6), y: w.y + rand(-6, 6), text: String(Math.round(dmg)), crit: !!crit, age: 0, life: crit ? 0.8 : 0.55 });
+    popups.push({ x: w.x + rand(-6, 6), y: w.y + rand(-6, 6), text: fmt(Math.round(dmg)), crit: !!crit, age: 0, life: crit ? 0.8 : 0.55 });
   }
   if (b.hp <= 0) breakBlock(b);
 }
@@ -1902,8 +1904,8 @@ function drawHUD() {
     }
     y += 28;
   };
-  row('HULL', player.hull / S.maxHull, '#4dff88', `${Math.ceil(player.hull)} / ${S.maxHull}`);
-  if (S.maxShield > 0) row('SHLD', player.shield / S.maxShield, '#7fd8ff', `${Math.ceil(player.shield)} / ${S.maxShield}`);
+  row('HULL', player.hull / S.maxHull, '#4dff88', `${fmt(Math.ceil(player.hull))} / ${fmt(S.maxHull)}`);
+  if (S.maxShield > 0) row('SHLD', player.shield / S.maxShield, '#7fd8ff', `${fmt(Math.ceil(player.shield))} / ${fmt(S.maxShield)}`);
   row('PULSE', player.pulse / player.maxPulse, '#9ff7ff', player.pulse >= player.maxPulse ? 'PRESS E' : null);
   if (S.rockets > 0) {
     ctx.textAlign = 'left';
@@ -1935,7 +1937,7 @@ function drawHUD() {
     ctx.textAlign = 'left';
     ctx.font = font(9);
     ctx.fillStyle = CUR[k].text;
-    ctx.fillText(`+${runWallet[k]}`, cx + 15, 101);
+    ctx.fillText(`+${fmt(runWallet[k])}`, cx + 15, 101);
   });
 
   ctx.textAlign = 'left';
@@ -1969,7 +1971,7 @@ function walletRow(cy, wallet, prefix, cell) {
     ctx.textAlign = 'left';
     ctx.font = font(12);
     ctx.fillStyle = CUR[k].text;
-    ctx.fillText(`${prefix || ''}${wallet[k]}`, x + cell * 4 + 8, cy + 7);
+    ctx.fillText(`${prefix || ''}${fmt(wallet[k])}`, x + cell * 4 + 8, cy + 7);
   });
 }
 
@@ -2017,7 +2019,7 @@ function nodeStyle(n) {
 function costRow(cost, rightX, baseY, dim) {
   let rx = rightX;
   Object.keys(cost).sort((a, b) => CUR_ORDER.indexOf(b) - CUR_ORDER.indexOf(a)).forEach(k => {
-    const txt = String(cost[k]);
+    const txt = fmt(cost[k]);
     ctx.font = font(8);
     ctx.textAlign = 'right';
     ctx.fillStyle = !dim && save.wallet[k] >= cost[k] ? CUR[k].text : '#5d6470';
@@ -2130,7 +2132,7 @@ function drawHangar() {
     ctx.font = font(10);
     ctx.textAlign = 'left';
     ctx.fillStyle = CUR[k].text;
-    ctx.fillText(String(save.wallet[k]), x + 16, 62);
+    ctx.fillText(fmt(save.wallet[k]), x + 16, 62);
   });
 
   ctx.textAlign = 'center';
@@ -2157,7 +2159,7 @@ function drawHangar() {
     ctx.fillText(label, x, 60);
     ctx.fillStyle = col;
     ctx.font = font(10);
-    ctx.fillText(String(v), x + ctx.measureText(label).width + 12, 62);
+    ctx.fillText(fmt(v), x + ctx.measureText(label).width + 12, 62);
   });
 
   ctx.textAlign = 'center';
@@ -2340,7 +2342,7 @@ function drawLevels() {
     if (!gunList.length) line('GUNS: NONE');
     for (let i = 0; i < gunList.length; i += 2) line((i ? '      ' : 'GUNS: ') + gunList.slice(i, i + 2).join('   '), undefined, 8, 18);
     y += 4;
-    line(`CORE HP: ${p.coreHp}`, '#9ff7ff', 8, 30);
+    line(`CORE HP: ${fmt(p.coreHp)}`, '#9ff7ff', 8, 30);
     ctx.font = font(8);
     ctx.fillStyle = '#9fd3cc';
     ctx.fillText(st === 'next' ? 'FIRST CLEAR PAYS ABOUT' : 'A REPLAY PAYS ABOUT', inf.x + 20, y);
@@ -2353,7 +2355,7 @@ function drawLevels() {
       ctx.font = font(9);
       ctx.fillStyle = CUR[k].text;
       ctx.textAlign = 'left';
-      ctx.fillText(String(v), x + 16, y + 1);
+      ctx.fillText(fmt(v), x + 16, y + 1);
     });
   }
 
