@@ -73,6 +73,10 @@ level always builds the same boss, so a barrage can be learned and dodged.
 Bosses grow with the level, and every 5th is a **Guardian**: bigger, more guns,
 and roughly double core health.
 
+There are 36 levels. Level 36 is the **Final Boss**: a giant copy of your own
+ship built from blocks, with 14 guns and triple core health. Beat it to win the
+game; after that every level stays open for replays.
+
 ## Upgrades
 
 The hangar is an upgrade tree rooted at FIGHT, with 28 nodes across four branches:

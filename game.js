@@ -52,11 +52,18 @@ function freshSave() { return { wallet: emptyWallet(), upgrades: {}, level: 1, b
 
 // save.level is the frontier: the first level not yet beaten. Anything from 1 up
 // to it can be fought; only a win AT the frontier is a first clear.
+// The campaign ends at MAX_LEVEL, the final boss. Beating it moves the frontier
+// one past the end, which is how "game complete" is stored.
+const MAX_LEVEL = 36;
+function topLevel() { return Math.min(save.level, MAX_LEVEL); }
+function gameComplete() { return save.level > MAX_LEVEL; }
 function normalizeSave(s) {
-  if (!s.selected || s.selected > s.level || s.selected < 1) s.selected = s.level;
+  if (s.level > MAX_LEVEL + 1) s.level = MAX_LEVEL + 1;
+  const top = Math.min(s.level, MAX_LEVEL);
+  if (!s.selected || s.selected > top || s.selected < 1) s.selected = top;
   return s;
 }
-function levelName(L) { return L % 5 === 0 ? `GUARD ${L / 5}` : `LEVEL ${L}`; }
+function levelName(L) { return L === MAX_LEVEL ? 'FINAL BOSS' : L % 5 === 0 ? `GUARD ${L / 5}` : `LEVEL ${L}`; }
 
 let save = loadSave();
 
@@ -404,9 +411,11 @@ function seededRandom(seed) {
 function makeBoss(level) {
   const rng = seededRandom(level * 7919 + 17);
   const rr = (a, b) => a + rng() * (b - a);
-  const guardian = level % 5 === 0;
-  const cols = oddClamp(5 + 2 * Math.floor((level - 1) / 3) + (guardian ? 2 : 0), 5, 13);
-  const rows = oddClamp(5 + 2 * Math.floor((level - 1) / 4), 5, 11);
+  const final = level === MAX_LEVEL;
+  const guardian = level % 5 === 0 || final;
+  // The final boss is a giant copy of your own ship, so it gets its own grid.
+  const cols = final ? 15 : oddClamp(5 + 2 * Math.floor((level - 1) / 3) + (guardian ? 2 : 0), 5, 13);
+  const rows = final ? 13 : oddClamp(5 + 2 * Math.floor((level - 1) / 4), 5, 11);
   const cell = cellSize();
   const midC = (cols - 1) / 2, midR = (rows - 1) / 2;
   const density = 0.58 + Math.min(0.28, level * 0.015);
@@ -432,11 +441,31 @@ function makeBoss(level) {
   // boss.blocks sharing the core's coordinates, and killing that phantom (the
   // pulse and splash damage walk boss.blocks, not the grid) clears the core out
   // of the grid: still drawn, but impossible to hit.
-  const coreHp = 10 * (34 + level * 13) * (guardian ? 2.2 : 1);
+  const coreHp = 10 * (34 + level * 13) * (final ? 3 : guardian ? 2.2 : 1);
   const core = put(midR, midC, 'core', Math.round(coreHp));
 
+  if (final) {
+    // Your ship's outline (SHIP, nose along +x -- the boss's front) rasterised
+    // onto the grid: a cell is armour when its centre falls inside the hull.
+    const poly = ['nose', 'wingL', 'notchL', 'tail', 'notchR', 'wingR'].map(k => SHIP[k]);
+    const inside = (x, y) => {
+      let hit = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i], [xj, yj] = poly[j];
+        if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+      }
+      return hit;
+    };
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = -0.8 + ((c + 0.5) / cols) * 1.8, y = -0.84 + ((r + 0.5) / rows) * 1.68;
+        if (inside(x, y)) put(r, c, 'armour', armourHp);
+      }
+    }
+  }
+
   // Mirrored silhouette, so every boss reads as a built machine rather than noise.
-  for (let r = 0; r < rows; r++) {
+  for (let r = 0; r < rows && !final; r++) {
     for (let c = 0; c <= Math.floor(cols / 2); c++) {
       const nx = (c - midC) / (cols / 2), ny = (r - midR) / (rows / 2);
       const d = Math.hypot(nx, ny);
@@ -448,7 +477,7 @@ function makeBoss(level) {
   }
 
   // Guns replace armour blocks, preferring the outside where you can reach them.
-  const gunCount = Math.min(11, 2 + Math.floor(level / 2) + (guardian ? 3 : 0));
+  const gunCount = final ? 14 : Math.min(11, 2 + Math.floor(level / 2) + (guardian ? 3 : 0));
   const pool = blocks
     .filter(b => b.kind === 'armour')
     .sort((a, b) => (Math.hypot(b.c - midC, b.r - midR) - Math.hypot(a.c - midC, a.r - midR)) + rr(-0.9, 0.9));
@@ -468,7 +497,7 @@ function makeBoss(level) {
     dashSpeed: Math.min(900, 520 + level * 14 + (guardian ? 100 : 0)),   // faster than the ship: a real lunge
     sitTime: Math.max(1.1, 2.4 - level * 0.05),
     ai: { state: 'sit', t: 2.2 },
-    t: 0, cols, rows, cell, grid, blocks, core, level, guardian,
+    t: 0, cols, rows, cell, grid, blocks, core, level, guardian, final,
     armourTotal, armourLeft: armourTotal, sealed: true,
   };
 }
@@ -501,7 +530,7 @@ function blockAtWorld(x, y) {
 function startFight(level) {
   releaseAll();
   makePlayer();
-  const L = clamp(level || save.selected, 1, save.level);
+  const L = clamp(level || save.selected, 1, topLevel());
   boss = makeBoss(L);
   boss.firstClear = L === save.level;
   shots = []; flak = []; orbs = []; particles = []; beams = []; rockets = [];
@@ -666,7 +695,7 @@ function finishVictory() {
   save.clears++;
   if (boss.firstClear) {
     save.level++;
-    save.selected = save.level;
+    save.selected = topLevel();
     if (save.level > save.bestLevel) save.bestLevel = save.level;
   }
   writeSave();
@@ -2155,7 +2184,7 @@ function levelPreview(L) {
     const white = blockPayout(b.core).filter(p => p.cur === 'white').reduce((t, p) => t + p.n * p.value, 0);
     boss = saved;
     previewCache[key] = {
-      cols: b.cols, rows: b.rows, guardian: b.guardian, guns, red, blue, white,
+      cols: b.cols, rows: b.rows, guardian: b.guardian, final: b.final, guns, red, blue, white,
       blocks: b.blocks.map(x => ({ r: x.r, c: x.c, kind: x.kind })), coreHp: b.core.maxHp, count: b.blocks.length,
     };
   }
@@ -2169,7 +2198,7 @@ function levelsLayout() {
   const areaW = W - panelW - pad * 3;
   const tile = Math.max(70, Math.floor(Math.min((areaW - 4 * gap) / 5, (H - top - 90 - rowsShown * (gap + labelH)) / rowsShown)));
   const frontierSector = Math.floor((save.level - 1) / 5);
-  const maxSector = frontierSector + 1;   // one sector of locked levels is shown ahead
+  const maxSector = Math.min(frontierSector + 1, Math.floor((MAX_LEVEL - 1) / 5));   // one sector of locked levels is shown ahead, up to the final boss
   if (levelsScroll === null) levelsScroll = Math.max(0, frontierSector - 2);
   levelsScroll = clamp(levelsScroll, 0, Math.max(0, maxSector - rowsShown + 1));
   const tiles = [];
@@ -2177,6 +2206,7 @@ function levelsLayout() {
     const sector = levelsScroll + row;
     if (sector > maxSector) break;
     for (let i = 0; i < 5; i++) {
+      if (sector * 5 + i + 1 > MAX_LEVEL) break;
       tiles.push({ L: sector * 5 + i + 1, sector, x: pad + i * (tile + gap), y: top + row * (tile + gap + labelH) + labelH, w: tile, h: tile });
     }
   }
@@ -2216,8 +2246,9 @@ function drawLevels() {
   glowOff();
   ctx.font = font(8);
   ctx.fillStyle = '#9fd3cc';
-  const beaten = save.level - 1, guards = Math.floor(beaten / 5);
-  ctx.fillText(`CLEARED ${beaten} LEVEL${beaten === 1 ? '' : 'S'}   -   GUARDIANS BEATEN ${guards}   -   NEXT UP: ${levelName(save.level)}${save.level % 5 ? '' : ' (LV ' + save.level + ')'}`, W / 2, 76);
+  const beaten = save.level - 1, guards = Math.floor(Math.min(beaten, MAX_LEVEL - 1) / 5);
+  if (gameComplete()) ctx.fillText(`ALL  LEVELS CLEARED - FINAL BOSS DESTROYED - REPLAY ANY FIGHT`, W / 2, 76);
+  else ctx.fillText(`CLEARED ${beaten} LEVEL${beaten === 1 ? '' : 'S'}   -   GUARDIANS BEATEN ${guards}   -   NEXT UP: ${levelName(save.level)}${save.level % 5 ? '' : ' (LV ' + save.level + ')'}`, W / 2, 76);
   if (lay.maxSector + 1 > lay.rowsShown) {
     ctx.fillStyle = 'rgba(207,233,228,0.45)';
     ctx.fillText('SCROLL OR UP/DOWN FOR MORE SECTORS', W / 2, 96);
@@ -2245,7 +2276,7 @@ function drawLevels() {
     ctx.font = font(7);
     ctx.textAlign = 'left';
     ctx.fillStyle = p.guardian ? '#ff7a7a' : (st === 'locked' ? '#4a5462' : '#eaf6ff');
-    ctx.fillText(p.guardian ? `GUARD ${t.L / 5}` : `LV ${t.L}`, t.x + 8, t.y + t.h - 9);
+    ctx.fillText(p.final ? "FINAL" : p.guardian ? `GUARD ${t.L / 5}` : `LV ${t.L}`, t.x + 8, t.y + t.h - 9);
     ctx.textAlign = 'right';
     ctx.fillStyle = st === 'beaten' ? '#ffd84a' : st === 'next' ? '#7fe9ff' : '#4a5462';
     const narrow = t.w < 140;   // short marks when the tile is too small for words
@@ -2381,7 +2412,7 @@ function drawTitle() {
 
 // ---------- level picker ----------
 function pickLevel(d) {
-  save.selected = clamp(save.selected + d, 1, save.level);
+  save.selected = clamp(save.selected + d, 1, topLevel());
   writeSave();
 }
 
@@ -2396,7 +2427,7 @@ function drawLevelPicker(fight, cx) {
     ctx.fillText(glyph, r.x + r.w / 2 + 1, r.y + r.h / 2 + 5);
   };
   arrow(fight.prev, '<', save.selected > 1);
-  arrow(fight.next, '>', save.selected < save.level);
+  arrow(fight.next, ">", save.selected < topLevel());
 
   // what this fight pays, above the button
   const first = save.selected === save.level;
@@ -2419,7 +2450,7 @@ function endButtons() {
   const plain = { fill: 'rgba(26,32,38,0.95)', border: '#8fd0c6' };
   const defs = mode === 'cleared'
     ? [
-        Object.assign({ label: 'NEXT LEVEL', key: 'n', act: () => startFight(Math.min(L + 1, save.level)) }, green),
+        ...(L < MAX_LEVEL ? [Object.assign({ label: "NEXT LEVEL", key: "n", act: () => startFight(Math.min(L + 1, topLevel())) }, green)] : []),
         Object.assign({ label: 'REPLAY', key: 'r', act: () => startFight(L) }, plain),
         Object.assign({ label: 'HANGAR', key: 'h', act: toHangar }, plain),
       ]
@@ -2458,7 +2489,9 @@ function drawEndScreen(title, titleColor, subtitle, subtitleColor) {
 
 function drawCleared() {
   const L = boss.level;
-  if (boss.firstClear) {
+  if (boss.final && boss.firstClear) {
+    drawEndScreen('YOU WIN', '#7cf29a', `FINAL BOSS DESTROYED - ALL ${MAX_LEVEL} LEVELS CLEARED!`, '#7cf29a');
+  } else if (boss.firstClear) {
     drawEndScreen('CORE DESTROYED', '#ffd84a', `${levelName(L)} CLEARED - FIRST CLEAR!`, '#ffd84a');
   } else {
     drawEndScreen('CORE DESTROYED', '#ffd84a', `${levelName(L)} CLEARED - REPLAY, NO WHITE`);
