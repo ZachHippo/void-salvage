@@ -171,7 +171,7 @@ const UPGRADES = [
   // salvage and engines
   { id: 'magnet',      name: 'Tractor Coil',    code: 'MAG', parent: null,        pos: [0, 1.8],
     max: 5, base: 65,  step: 1.42, price: { red: 0.5, blue: 0.5 },
-    desc: l => `+${l * 40}% salvage pickup range` },
+    desc: l => `drops fly to you ${l * 35}% faster` },
   { id: 'speed',       name: 'Thrusters',       code: 'SPD', parent: 'magnet',    pos: [-1.6, 2.8],
     max: 5, base: 75,  step: 1.42, price: { blue: 1 },
     desc: l => `+${l * 10}% top speed` },
@@ -227,7 +227,7 @@ function computeStats() {
     droneDelay:  0.5 / (1 + 0.25 * L('droneRate')),
     droneDmg:    0.6 * (1 + 0.30 * L('droneDmg')),
     topSpeed:    340 * (1 + 0.10 * L('speed')),
-    magnet:      150 * (1 + 0.40 * L('magnet')),
+    magnet:      420 * (1 + 0.35 * L('magnet')),   // how hard drops accelerate toward the ship
     yield:       { red: 1 + 0.2 * L('redYield'), blue: 1 + 0.2 * L('blueYield'), white: 1 },
     whiteBonus:  L('whiteYield'),
     rockets:     L('rocket'),
@@ -918,6 +918,48 @@ function bossAI(dt, ext) {
   boss.y = clamp(boss.y, my, H - my);
 }
 
+// ---------- the ring ----------
+// The fight happens inside a ring. Outside it, poison eats the hull. It is a
+// circle a little wider than the short side of the screen, so the corners and
+// the far sides are poison while the middle stays roomy.
+const POISON_DPS = 20;
+function arena() {
+  return { x: W / 2, y: H / 2, r: Math.min(W, H) * 0.48 + Math.abs(W - H) * 0.12 };
+}
+
+function drawArena() {
+  const a = arena(), pulse = 0.5 + 0.5 * Math.sin(elapsed * 3);
+  ctx.save();
+  // everything outside the ring gets a green haze
+  ctx.beginPath();
+  ctx.rect(-60, -60, W + 120, H + 120);
+  ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2, true);
+  ctx.fillStyle = 'rgba(70,255,110,0.075)';
+  ctx.fill('evenodd');
+  // the edge: a slow dashed glow
+  glowOn('#6dff8a', 14);
+  ctx.strokeStyle = `rgba(109,255,138,${0.45 + pulse * 0.3})`;
+  ctx.lineWidth = 2.5;
+  ctx.setLineDash([14, 10]);
+  ctx.lineDashOffset = -elapsed * 30;
+  ctx.beginPath(); ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2); ctx.stroke();
+  glowOff();
+  ctx.restore();
+}
+
+function drawPoisonWarning() {
+  const k = 0.5 + 0.5 * Math.sin(elapsed * 10);
+  ctx.fillStyle = `rgba(60,255,100,${0.06 + k * 0.05})`;
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  glowOn('#6dff8a', 16);
+  ctx.fillStyle = '#9dffb0';
+  ctx.font = font(11);
+  ctx.fillText('POISON - GET BACK INSIDE THE RING', W / 2, H - 52);
+  glowOff();
+  ctx.textAlign = 'left';
+}
+
 function update(dt) {
   // the first moment after the core blows plays in slow motion
   if (victory && victory.t < 0.3) dt *= 0.35;
@@ -951,6 +993,15 @@ function update(dt) {
   if (S.regen) player.hull = Math.min(S.maxHull, player.hull + S.regen * dt);
   if (player.shieldTimer > 0) player.shieldTimer -= dt;
   else if (player.shield < S.maxShield) player.shield = Math.min(S.maxShield, player.shield + S.shieldRate * dt);
+
+  // --- poison outside the ring: it eats the hull directly, straight past the shield ---
+  const ring = arena();
+  player.poisoned = !victory && dist(player.x, player.y, ring.x, ring.y) > ring.r;
+  if (player.poisoned) {
+    player.hull -= POISON_DPS * dt;
+    if (Math.random() < 0.6) particles.push({ x: player.x + rand(-10, 10), y: player.y + rand(-10, 10), vx: rand(-20, 20), vy: rand(-60, -20), life: 0.5, age: 0, color: '#6dff8a', size: rand(1.5, 3) });
+    if (player.hull <= 0) { player.hull = 0; failFight(); return; }
+  }
 
   fireTimer -= dt;
   if (mouse.down && fireTimer <= 0) { fireTimer = S.fireDelay; firePlayer(); }
@@ -1076,23 +1127,22 @@ function update(dt) {
 
   // --- salvage ---
   orbs.forEach(o => {
-    const d = dist(o.x, o.y, player.x, player.y);
-    if (victory) {
-      // after a brief spray outward, every drop homes in on the ship, faster and faster
-      o.age = (o.age || 0) + dt;
-      if (o.age > 0.2) {
-        const a = Math.atan2(player.y - o.y, player.x - o.x), spd = Math.min(1500, 280 + o.age * 1100);
-        const k = Math.min(1, 9 * dt);
-        o.vx += (Math.cos(a) * spd - o.vx) * k;
-        o.vy += (Math.sin(a) * spd - o.vy) * k;
-      }
-    } else if (d < S.magnet) {
+    // Every drop sprays out for a moment, then homes in on the ship from
+    // anywhere on the field, faster the longer it flies. Tractor Coil makes it
+    // accelerate harder; after the core blows everything comes in at full tilt.
+    o.age = (o.age || 0) + dt;
+    if (o.age > 0.22) {
       const a = Math.atan2(player.y - o.y, player.x - o.x);
-      o.vx = Math.cos(a) * 300; o.vy = Math.sin(a) * 300;
+      const spd = victory ? Math.min(1500, 280 + o.age * 1100) : Math.min(1100, 160 + o.age * S.magnet);
+      const k = Math.min(1, (victory ? 9 : 7) * dt);
+      o.vx += (Math.cos(a) * spd - o.vx) * k;
+      o.vy += (Math.sin(a) * spd - o.vy) * k;
+    } else {
+      o.vx -= o.vx * 1.5 * dt; o.vy -= o.vy * 1.5 * dt;
     }
     o.x += o.vx * dt; o.y += o.vy * dt;
-    if (!victory) { o.vx -= o.vx * 1.5 * dt; o.vy -= o.vy * 1.5 * dt; }
   });
+
   orbs = orbs.filter(o => {
     if (dist(o.x, o.y, player.x, player.y) < 20 + Math.hypot(o.vx, o.vy) * dt) {
       runWallet[o.cur] += o.value;
@@ -1617,6 +1667,7 @@ function drawWorld() {
   ctx.save();
   if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
   drawBackdrop();
+  drawArena();
 
   // engine trail
   player.trail.forEach(p => {
@@ -1745,6 +1796,7 @@ function drawFight() {
     ctx.fillRect(0, 0, W, H);
   }
   drawHUD();
+  if (player.poisoned && !victory) drawPoisonWarning();
   if (paused) drawPaused();
 }
 

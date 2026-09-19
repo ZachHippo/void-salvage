@@ -48,8 +48,11 @@ drop flies to your ship before the win screen appears. The level map (from the
 hangar) shows every level in sectors of five, with each boss previewed, what you
 have cleared, what is next, and what a fight pays.
 
-Every block you break pays out salvage. Orbs magnet toward you; collect them to
-charge the pulse and bank currency. Clearing a level auto-salvages the wreck, so
+Fights happen inside a glowing ring. Leave it and poison eats your hull, straight
+past the shield, until you get back in.
+
+Every block you break pays out salvage. Every drop flies to your ship from anywhere
+on the field; collecting them charges the pulse and banks currency. Clearing a level auto-salvages the wreck, so
 the core's payout is never stranded -- but **dying only banks what you actually
 picked up**, which is the whole risk.
 
