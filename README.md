@@ -37,9 +37,9 @@ Clearing a level for the first time is the only way to earn white crystals.
 You can go back and replay any level you have unlocked for more red and blue,
 and the bigger the boss, the bigger the payout.
 
-The boss hunts you: it sits and tracks you, charges up while a warning line
-locks onto your ship, dashes at you (bending toward you as it goes), then pulls
-up and sits again. An arrow over its core shows where it is aimed -- white while it sits,
+The boss hunts you: it sits and tracks you, charges up while a warning line and
+crosshair mark where your ship will be if it holds course, then rams straight
+through that spot and sits again. Change direction when it lunges. An arrow over its core shows where it is aimed -- white while it sits,
 orange while it charges, red while it dashes. Aimed guns lead your movement, so change
 direction rather than drifting.
 
@@ -51,8 +51,9 @@ have cleared, what is next, and what a fight pays.
 Fights happen inside a glowing ring. Leave it and poison eats your hull, straight
 past the shield, until you get back in.
 
-Every block you break pays out salvage. Every drop flies to your ship from anywhere
-on the field; collecting them charges the pulse and banks currency. Clearing a level auto-salvages the wreck, so
+Every block you break pays out salvage. Drops are pulled in once you get close
+(Tractor Coil widens the range); collecting them charges the pulse and banks
+currency. Once the core dies, every drop flies to you from anywhere. Clearing a level auto-salvages the wreck, so
 the core's payout is never stranded -- but **dying only banks what you actually
 picked up**, which is the whole risk.
 

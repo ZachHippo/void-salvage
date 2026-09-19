@@ -171,7 +171,7 @@ const UPGRADES = [
   // salvage and engines
   { id: 'magnet',      name: 'Tractor Coil',    code: 'MAG', parent: null,        pos: [0, 1.8],
     max: 5, base: 65,  step: 1.42, price: { red: 0.5, blue: 0.5 },
-    desc: l => `drops fly to you ${l * 35}% faster` },
+    desc: l => `+${l * 40}% salvage pickup range` },
   { id: 'speed',       name: 'Thrusters',       code: 'SPD', parent: 'magnet',    pos: [-1.6, 2.8],
     max: 5, base: 75,  step: 1.42, price: { blue: 1 },
     desc: l => `+${l * 10}% top speed` },
@@ -227,7 +227,7 @@ function computeStats() {
     droneDelay:  0.5 / (1 + 0.25 * L('droneRate')),
     droneDmg:    0.6 * (1 + 0.30 * L('droneDmg')),
     topSpeed:    340 * (1 + 0.10 * L('speed')),
-    magnet:      420 * (1 + 0.35 * L('magnet')),   // how hard drops accelerate toward the ship
+    magnet:      150 * (1 + 0.40 * L('magnet')),   // pickup range during the fight
     yield:       { red: 1 + 0.2 * L('redYield'), blue: 1 + 0.2 * L('blueYield'), white: 1 },
     whiteBonus:  L('whiteYield'),
     rockets:     L('rocket'),
@@ -465,7 +465,7 @@ function makeBoss(level) {
     x: W / 2, y: H * 0.34, angle: Math.PI / 2,   // local +x is the boss's front: it starts facing down at you
     spin: 0, vx: 0, vy: 0,
     turn: 1.1 + level * 0.03,
-    dashSpeed: Math.min(620, 300 + level * 11 + (guardian ? 80 : 0)),
+    dashSpeed: Math.min(900, 520 + level * 14 + (guardian ? 100 : 0)),   // faster than the ship: a real lunge
     sitTime: Math.max(1.1, 2.4 - level * 0.05),
     ai: { state: 'sit', t: 2.2 },
     t: 0, cols, rows, cell, grid, blocks, core, level, guardian,
@@ -874,48 +874,54 @@ function hurtPlayer(amount) {
 
 // ---------- boss hunting ----------
 // The boss hunts you in a loop: it sits and tracks you, charges up while it
-// locks on (a warning line shows the aim), dashes at where you are --
-// bending toward you as it goes -- then pulls up short and sits again. Its
+// locks on to where you will be (a warning line and crosshair show the spot),
+// then rams straight through that point and sits again. Its
 // aim is always shown by the arrow over its core.
 function bossAI(dt, ext) {
   const ai = boss.ai;
   ai.t -= dt;
-  const toP = Math.atan2(player.y - boss.y, player.x - boss.x);
-  const turnTo = rate => {
-    const d = ((toP - boss.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+  const turnTo = (x, y, rate) => {
+    const want = Math.atan2(y - boss.y, x - boss.x);
+    const d = ((want - boss.angle + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
     boss.angle += clamp(d, -rate * dt, rate * dt);
   };
   const settle = () => { const k = Math.pow(0.03, dt); boss.vx *= k; boss.vy *= k; };
-  const stopAt = ext + 50;   // pulls up short of the ship instead of parking on it
+  // the boss centre must stay where the whole boss fits on screen
+  const mx = Math.min(ext + 8, W / 2), my = Math.min(ext + 8, H / 2);
 
   if (ai.state === 'sit') {
-    turnTo(boss.turn * 0.6);
+    turnTo(player.x, player.y, boss.turn * 0.6);
     settle();
     if (ai.t <= 0) { ai.state = 'charge'; ai.t = boss.guardian ? 0.75 : 0.95; }
   } else if (ai.state === 'charge') {
-    turnTo(boss.turn * 2.6);
+    // Predict where the ship will be when the boss gets there if it holds its
+    // heading: solve for the moment the ship's path and the boss's trip (the
+    // rest of the charge, then the dash) meet. A few refinements settle it.
+    const vEff = boss.dashSpeed * 0.8;
+    let t = Math.max(0, ai.t) + dist(boss.x, boss.y, player.x, player.y) / vEff;
+    for (let i = 0; i < 4; i++) {
+      const fx = player.x + player.vx * t, fy = player.y + player.vy * t;
+      t = Math.max(0, ai.t) + dist(boss.x, boss.y, fx, fy) / vEff;
+    }
+    ai.eta = t;
+    ai.px = clamp(player.x + player.vx * t, mx, W - mx);
+    ai.py = clamp(player.y + player.vy * t, my, H - my);
+    turnTo(ai.px, ai.py, boss.turn * 2.6);
     settle();
-    if (ai.t <= 0) { ai.state = 'dash'; ai.t = 1.2; ai.tx = player.x; ai.ty = player.y; }
+    if (ai.t <= 0) { ai.state = 'dash'; ai.t = Math.min(2.5, ai.eta + 0.6); ai.tx = ai.px; ai.ty = ai.py; }
   } else {
-    // homing: the target point slides toward the ship during the dash
-    const k = Math.min(1, 1.4 * dt);
-    ai.tx += (player.x - ai.tx) * k;
-    ai.ty += (player.y - ai.ty) * k;
+    // Committed: no steering mid-dash. It drives its body straight through the
+    // predicted point, so holding course gets you rammed and a late turn dodges.
     const dx = ai.tx - boss.x, dy = ai.ty - boss.y, d = Math.hypot(dx, dy);
-    const want = d > stopAt ? Math.min(boss.dashSpeed, (d - stopAt) * 3.5) : 0;
-    const a = Math.atan2(dy, dx), blend = Math.min(1, 6 * dt);
+    const want = Math.min(boss.dashSpeed, d * 4 + 60);
+    const a = Math.atan2(dy, dx), blend = Math.min(1, 7 * dt);
     boss.vx += (Math.cos(a) * want - boss.vx) * blend;
     boss.vy += (Math.sin(a) * want - boss.vy) * blend;
-    turnTo(boss.turn * 1.6);
-    if (ai.t <= 0 || d <= stopAt + 4) { ai.state = 'sit'; ai.t = boss.sitTime; }
+    if (ai.t <= 0 || d < 10) { ai.state = 'sit'; ai.t = boss.sitTime; }
   }
 
-  boss.x += boss.vx * dt;
-  boss.y += boss.vy * dt;
-  // stay fully on screen where there is room for it
-  const mx = Math.min(ext + 8, W / 2), my = Math.min(ext + 8, H / 2);
-  boss.x = clamp(boss.x, mx, W - mx);
-  boss.y = clamp(boss.y, my, H - my);
+  boss.x = clamp(boss.x + boss.vx * dt, mx, W - mx);
+  boss.y = clamp(boss.y + boss.vy * dt, my, H - my);
 }
 
 // ---------- the ring ----------
@@ -1127,21 +1133,24 @@ function update(dt) {
 
   // --- salvage ---
   orbs.forEach(o => {
-    // Every drop sprays out for a moment, then homes in on the ship from
-    // anywhere on the field, faster the longer it flies. Tractor Coil makes it
-    // accelerate harder; after the core blows everything comes in at full tilt.
+    // During the fight a drop only comes to you once you are within pickup
+    // range (Tractor Coil widens it). Once the core is dead, every drop homes
+    // in on the ship from anywhere on the field, faster and faster.
     o.age = (o.age || 0) + dt;
-    if (o.age > 0.22) {
-      const a = Math.atan2(player.y - o.y, player.x - o.x);
-      const spd = victory ? Math.min(1500, 280 + o.age * 1100) : Math.min(1100, 160 + o.age * S.magnet);
-      const k = Math.min(1, (victory ? 9 : 7) * dt);
+    if (victory && o.age > 0.22) {
+      const a = Math.atan2(player.y - o.y, player.x - o.x), spd = Math.min(1500, 280 + o.age * 1100);
+      const k = Math.min(1, 9 * dt);
       o.vx += (Math.cos(a) * spd - o.vx) * k;
       o.vy += (Math.sin(a) * spd - o.vy) * k;
+    } else if (!victory && dist(o.x, o.y, player.x, player.y) < S.magnet) {
+      const a = Math.atan2(player.y - o.y, player.x - o.x);
+      o.vx = Math.cos(a) * 300; o.vy = Math.sin(a) * 300;
     } else {
       o.vx -= o.vx * 1.5 * dt; o.vy -= o.vy * 1.5 * dt;
     }
     o.x += o.vx * dt; o.y += o.vy * dt;
   });
+
 
   orbs = orbs.filter(o => {
     if (dist(o.x, o.y, player.x, player.y) < 20 + Math.hypot(o.vx, o.vy) * dt) {
@@ -1383,7 +1392,8 @@ function drawCoreArrow() {
   ctx.restore();
 }
 
-// While charging, a warning line runs from the core's arrow to the ship and firms up
+// While charging, a warning line runs from the core's arrow to the spot the
+// boss is about to ram -- where the ship will be if it holds course and firms up
 // as the dash gets closer.
 function drawChargeLine() {
   if (!boss.ai || boss.ai.state !== 'charge' || victory) return;
@@ -1395,7 +1405,16 @@ function drawChargeLine() {
   ctx.lineDashOffset = -elapsed * 60;
   ctx.strokeStyle = `rgba(255,154,31,${0.2 + k * 0.6})`;
   ctx.lineWidth = 2 + k * 2;
-  ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(player.x, player.y); ctx.stroke();
+  const tx = boss.ai.px === undefined ? player.x : boss.ai.px, ty = boss.ai.py === undefined ? player.y : boss.ai.py;
+  ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(tx, ty); ctx.stroke();
+  // crosshair on the spot it is going to ram
+  ctx.setLineDash([]);
+  const r = 14 + (1 - k) * 10;
+  ctx.beginPath(); ctx.arc(tx, ty, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tx - r - 6, ty); ctx.lineTo(tx - r + 6, ty); ctx.moveTo(tx + r - 6, ty); ctx.lineTo(tx + r + 6, ty);
+  ctx.moveTo(tx, ty - r - 6); ctx.lineTo(tx, ty - r + 6); ctx.moveTo(tx, ty + r - 6); ctx.lineTo(tx, ty + r + 6);
+  ctx.stroke();
   ctx.restore();
 }
 
