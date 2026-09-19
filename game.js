@@ -57,7 +57,25 @@ function freshSave() { return { wallet: emptyWallet(), upgrades: {}, level: 1, b
 const MAX_LEVEL = 36;
 function topLevel() { return Math.min(save.level, MAX_LEVEL); }
 function gameComplete() { return save.level > MAX_LEVEL; }
+// Upgrades that were taken out of the game. Whatever was spent on them comes
+// back to the wallet the first time an old save loads.
+const REMOVED_UPGRADES = [
+  { id: 'ricochet', base: 150, step: 1.9,  price: { blue: 1, white: 0.03 } },
+  { id: 'homing',   base: 165, step: 1.85, price: { blue: 1, white: 0.03 } },
+  { id: 'invuln',   base: 130, step: 1.6,  price: { blue: 1, white: 0.02 } },
+];
+function refundRemoved(s) {
+  REMOVED_UPGRADES.forEach(up => {
+    const lv = (s.upgrades && s.upgrades[up.id]) || 0;
+    for (let i = 0; i < lv; i++) {
+      const c = costOf(up, i);
+      for (const k in c) s.wallet[k] = (s.wallet[k] || 0) + c[k];
+    }
+    if (s.upgrades) delete s.upgrades[up.id];
+  });
+}
 function normalizeSave(s) {
+  if (s.wallet) refundRemoved(s);
   if (s.level > MAX_LEVEL + 1) s.level = MAX_LEVEL + 1;
   const top = Math.min(s.level, MAX_LEVEL);
   if (!s.selected || s.selected > top || s.selected < 1) s.selected = top;
@@ -131,12 +149,6 @@ const UPGRADES = [
   { id: 'pierce',      name: 'Penetrator',      code: 'PRC', parent: 'velocity',  pos: [1.6, -4.1],
     max: 3, base: 180, step: 1.9,  price: { red: 1, white: 0.03 },
     desc: l => `rounds punch through ${l} extra block${l > 1 ? 's' : ''}` },
-  { id: 'ricochet',    name: 'Ricochet Rounds', code: 'RIC', parent: 'velocity',  pos: [3.1, -3.1],
-    max: 3, base: 150, step: 1.9,  price: { blue: 1, white: 0.03 },
-    desc: l => `rounds bounce ${l}x off the arena` },
-  { id: 'homing',      name: 'Seeker Rounds',   code: 'SEEK', parent: 'ricochet', pos: [4.6, -3.6],
-    max: 3, base: 165, step: 1.85, price: { blue: 1, white: 0.03 },
-    desc: l => `rounds curve toward armour` },
 
   // defence
   { id: 'hull',        name: 'Plating',         code: 'HULL', parent: null,       pos: [-2.2, 0],
@@ -151,9 +163,6 @@ const UPGRADES = [
   { id: 'shieldRegen', name: 'Capacitor Bank',  code: 'CHG', parent: 'shield',    pos: [-5.2, 0.3],
     max: 5, base: 100, step: 1.5,  price: { blue: 1 },
     desc: l => `shield recharges ${l * 30}% faster` },
-  { id: 'invuln',      name: 'Phase Frame',     code: 'PHS', parent: 'shield',    pos: [-5.2, 1.7],
-    max: 4, base: 130, step: 1.6,  price: { blue: 1, white: 0.02 },
-    desc: l => `+${(l * 0.15).toFixed(2)}s invulnerable after a hit` },
 
   // pulse and drones
   { id: 'pulse',       name: 'Pulse Capacitor', code: 'PLS', parent: null,        pos: [2.2, 0],
@@ -161,10 +170,10 @@ const UPGRADES = [
     desc: l => `pulse charges ${l * 20}% faster` },
   { id: 'pulseRadius', name: 'Wide Emitter',    code: 'RAD', parent: 'pulse',     pos: [3.7, -0.9],
     max: 4, base: 90,  step: 1.5,  price: { blue: 1 },
-    desc: l => `+${l * 15}% pulse radius` },
+    desc: l => `+${l * 12}% pulse radius` },
   { id: 'pulseDmg',    name: 'Overcharge',      code: 'OVR', parent: 'pulseRadius', pos: [5.2, -1.4],
     max: 5, base: 110, step: 1.55, price: { blue: 1 },
-    desc: l => `+${l * 40}% pulse damage` },
+    desc: l => `+${l * 25}% pulse damage` },
   { id: 'drone',       name: 'Turret Drone',    code: 'DRN', parent: 'pulse',     pos: [3.7, 0.9],
     max: 4, base: 210, step: 1.9,  price: { red: 0.6, blue: 0.6, white: 0.04 },
     desc: l => `${l} drone${l > 1 ? 's' : ''} orbit and fire for you` },
@@ -218,18 +227,16 @@ function computeStats() {
     pierce:      L('pierce'),
     gunMult:     1 + 0.25 * L('gunHunter'),
     coreMult:    1 + 0.30 * L('coreBreaker'),
-    ricochet:    L('ricochet'),
     splash:      L('explosive') ? 28 + L('explosive') * 12 : 0,
-    homing:      L('homing'),
     maxHull:     100 + L('hull') * 25,
     regen:       1.5 * L('regen'),
     maxShield:   L('shield') * 20,
     shieldRate:  14 * (1 + 0.30 * L('shieldRegen')),
     shieldDelay: 2.5 * (1 - 0.12 * L('shieldRegen')),
-    iframes:     0.55 + 0.15 * L('invuln'),
+    iframes:     0.55,
     pulseRate:   1 + 0.20 * L('pulse'),
-    pulseRadius: 260 * (1 + 0.15 * L('pulseRadius')),
-    pulseDmg:    4 * (1 + 0.40 * L('pulseDmg')),
+    pulseRadius: 190 * (1 + 0.12 * L('pulseRadius')),
+    pulseDmg:    1.2 * (1 + 0.25 * L('pulseDmg')),
     drones:      L('drone'),
     droneDelay:  0.5 / (1 + 0.25 * L('droneRate')),
     droneDmg:    0.6 * (1 + 0.30 * L('droneDmg')),
@@ -421,7 +428,7 @@ function makeBoss(level) {
   const density = 0.58 + Math.min(0.28, level * 0.015);
   // Blocks and core both grow faster per level than they used to, so each
   // level is a longer fight than the one before.
-  const armourHp = 10 * (4 + Math.floor(level * 1.25) + (guardian ? 3 : 0));
+  const armourHp = Math.round(10 * (6 + level * 2.2 + level * level * 0.06 + (guardian ? 4 : 0)));
 
   const grid = [];
   for (let r = 0; r < rows; r++) { grid[r] = []; for (let c = 0; c < cols; c++) grid[r][c] = null; }
@@ -441,7 +448,7 @@ function makeBoss(level) {
   // boss.blocks sharing the core's coordinates, and killing that phantom (the
   // pulse and splash damage walk boss.blocks, not the grid) clears the core out
   // of the grid: still drawn, but impossible to hit.
-  const coreHp = 10 * (34 + level * 13) * (final ? 3 : guardian ? 2.2 : 1);
+  const coreHp = 10 * (60 + level * 24 + level * level * 0.5) * (final ? 3 : guardian ? 2.2 : 1);
   const core = put(midR, midC, 'core', Math.round(coreHp));
 
   if (final) {
@@ -485,7 +492,7 @@ function makeBoss(level) {
   for (let i = 0; i < Math.min(gunCount, pool.length); i++) {
     const b = pool[i];
     b.kind = 'gun';
-    b.hp = b.maxHp = Math.max(20, Math.round(armourHp * 0.7));
+    b.hp = b.maxHp = Math.max(30, Math.round(armourHp * 0.8));
     b.gun = makeGun(open[i % open.length].type, level);
   }
 
@@ -497,6 +504,9 @@ function makeBoss(level) {
     dashSpeed: Math.min(900, 520 + level * 14 + (guardian ? 100 : 0)),   // faster than the ship: a real lunge
     sitTime: Math.max(1.1, 2.4 - level * 0.05),
     ai: { state: 'sit', t: 2.2 },
+    // what its fire and its body do to you, growing with the level
+    shotDmg: Math.round(26 + level * 1.4), beamDmg: Math.round(22 + level * 1.3),
+    ramDmg: Math.round(28 + level * 1.8),
     t: 0, cols, rows, cell, grid, blocks, core, level, guardian, final,
     armourTotal, armourLeft: armourTotal, sealed: true,
   };
@@ -580,9 +590,9 @@ function breakBlock(b) {
   if (boss.grid[b.r][b.c] === b) boss.grid[b.r][b.c] = null;
   const w = blockWorld(b);
   const isCore = b.kind === 'core';
-  spawnParticles(w.x, w.y, BLOCK_COLOR[b.kind], isCore ? 60 : 14, isCore ? 340 : 130);
+  spawnParticles(w.x, w.y, BLOCK_COLOR[b.kind], isCore ? 36 : victory ? 6 : 14, isCore ? 280 : 130);
   spawnDebris(w, b);
-  shake = Math.max(shake, isCore ? 30 : 5);
+  if (!victory) shake = Math.max(shake, isCore ? 16 : 3);
 
   // Every block pays out, in its own colour.
   blockPayout(b).forEach(p => {
@@ -652,10 +662,10 @@ function beginVictory() {
   boss.blocks.forEach(b => {
     if (!b.alive || b.kind === 'core') return;
     const l = blockLocal(b);
-    b.dieAt = 0.22 + (Math.hypot(l.x - cl.x, l.y - cl.y) / boss.cell) * 0.1 + Math.random() * 0.05;
+    b.dieAt = 0.3 + (Math.hypot(l.x - cl.x, l.y - cl.y) / boss.cell) * 0.14 + Math.random() * 0.05;
   });
-  shake = Math.max(shake, 34);
-  spawnParticles(c.x, c.y, '#ffffff', 40, 420);
+  shake = Math.max(shake, 14);
+  spawnParticles(c.x, c.y, '#cfefff', 24, 300);
 }
 
 function victoryTick(dt) {
@@ -668,7 +678,7 @@ function victoryTick(dt) {
 }
 
 function spawnDebris(w, b) {
-  const n = victory ? 7 : 4;
+  const n = victory ? 4 : 4;
   const out = Math.atan2(w.y - boss.y, w.x - boss.x);
   for (let i = 0; i < n; i++) {
     const a = out + rand(-1.1, 1.1), sp = rand(90, victory ? 380 : 240);
@@ -788,7 +798,7 @@ function shotHit(s) {
 }
 
 // Rockets: a limited number per fight (one per Rocket Pod level). Each flies
-// out along your aim, then curves gently onto the nearest block and explodes:
+// straight along your aim, speeding up, and explodes on the first block it hits:
 // roughly one armour block's worth of damage on the block it hits, plus a
 // small splash. Strong, but a handful will not strip a boss on their own.
 function launchRocket() {
@@ -815,17 +825,9 @@ function rocketBlast(x, y, hit) {
 function updateRockets(dt) {
   rockets = rockets.filter(k => {
     k.age += dt;
-    // after a short straight launch, steer toward the nearest block
-    if (k.age > 0.18) {
-      const t = nearestBlock(k.x, k.y);
-      if (t) {
-        const want = Math.atan2(t.y - k.y, t.x - k.x), cur = Math.atan2(k.vy, k.vx);
-        const diff = ((want - cur + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-        const na = cur + clamp(diff, -1, 1) * 3.2 * dt;
-        const spd = Math.min(820, Math.hypot(k.vx, k.vy) + 900 * dt);
-        k.vx = Math.cos(na) * spd; k.vy = Math.sin(na) * spd;
-      }
-    }
+    // no guidance: it just accelerates along its launch line
+    const spd = Math.hypot(k.vx, k.vy), nsp = Math.min(820, spd + 900 * dt);
+    k.vx *= nsp / spd; k.vy *= nsp / spd;
     k.px = k.x; k.py = k.y;
     k.x += k.vx * dt; k.y += k.vy * dt;
     if (Math.random() < 0.8) particles.push({ x: k.x - k.vx * 0.02, y: k.y - k.vy * 0.02, vx: rand(-30, 30), vy: rand(-30, 30), life: 0.35, age: 0, color: '#7fe9ff', size: rand(1.5, 3) });
@@ -856,7 +858,7 @@ function firePlayer() {
       x: player.x + Math.cos(a) * player.radius,
       y: player.y + Math.sin(a) * player.radius,
       vx: Math.cos(a) * S.shotSpeed, vy: Math.sin(a) * S.shotSpeed,
-      r: 5, dmg: S.damage, bounces: S.ricochet, pierce: S.pierce, last: null,
+      r: 5, dmg: S.damage, pierce: S.pierce, last: null,
     });
   }
 }
@@ -865,7 +867,7 @@ function fireDrone(d) {
   const t = nearestBlock(d.x, d.y);
   if (!t) return;
   const a = Math.atan2(t.y - d.y, t.x - d.x);
-  shots.push({ x: d.x, y: d.y, vx: Math.cos(a) * 700, vy: Math.sin(a) * 700, r: 3, dmg: S.damage * S.droneDmg, bounces: 0 });
+  shots.push({ x: d.x, y: d.y, vx: Math.cos(a) * 700, vy: Math.sin(a) * 700, r: 3, dmg: S.damage * S.droneDmg });
 }
 
 // ---------- update ----------
@@ -1087,23 +1089,8 @@ function update(dt) {
 
   // --- player shots ---
   shots.forEach(s => {
-    if (S.homing) {
-      const t = nearestBlock(s.x, s.y);
-      if (t) {
-        const want = Math.atan2(t.y - s.y, t.x - s.x);
-        const cur = Math.atan2(s.vy, s.vx);
-        let diff = ((want - cur + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-        const turn = clamp(diff, -1, 1) * S.homing * 2.6 * dt;
-        const spd = Math.hypot(s.vx, s.vy), na = cur + turn;
-        s.vx = Math.cos(na) * spd; s.vy = Math.sin(na) * spd;
-      }
-    }
     s.px = s.x; s.py = s.y;
     s.x += s.vx * dt; s.y += s.vy * dt;
-    if (s.bounces > 0) {
-      if (s.x < 0 || s.x > W) { s.vx *= -1; s.x = clamp(s.x, 0, W); s.bounces--; }
-      if (s.y < 0 || s.y > H) { s.vy *= -1; s.y = clamp(s.y, 0, H); s.bounces--; }
-    }
   });
   shots = shots.filter(s => {
     const hit = shotHit(s);
@@ -1135,7 +1122,7 @@ function update(dt) {
     f.x += f.vx * dt; f.y += f.vy * dt; f.life -= dt;
   });
   flak = flak.filter(f => {
-    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(24); return false; }
+    if (dist(f.x, f.y, player.x, player.y) < player.hitRadius + f.r) { hurtPlayer(boss.shotDmg); return false; }
     return f.life > 0 && f.x > -40 && f.x < W + 40 && f.y > -40 && f.y < H + 40;
   });
 
@@ -1143,14 +1130,15 @@ function update(dt) {
   beams.forEach(bm => {
     if (!bm.firing) return;
     const dx = Math.cos(bm.angle), dy = Math.sin(bm.angle);
-    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(20);
+    if (distToRay(player.x, player.y, bm.x, bm.y, dx, dy, bm.len) < player.hitRadius + 7) hurtPlayer(boss.beamDmg);
   });
 
   // --- ramming the hull ---
   if (!victory && player.invuln <= 0 && blockAtWorld(player.x, player.y)) {
     const a = Math.atan2(player.y - boss.y, player.x - boss.x);
     player.vx = Math.cos(a) * 460; player.vy = Math.sin(a) * 460;
-    hurtPlayer(16);
+    // a dashing boss hits much harder than one you bump into
+    hurtPlayer(boss.ai.state === 'dash' ? boss.ramDmg * 1.6 : boss.ramDmg);
   }
 
   // --- salvage ---
@@ -1177,7 +1165,7 @@ function update(dt) {
   orbs = orbs.filter(o => {
     if (dist(o.x, o.y, player.x, player.y) < 20 + Math.hypot(o.vx, o.vy) * dt) {
       runWallet[o.cur] += o.value;
-      player.pulse = Math.min(player.maxPulse, player.pulse + 6 * S.pulseRate);
+      player.pulse = Math.min(player.maxPulse, player.pulse + 2.5 * S.pulseRate);
       return false;
     }
     return true;
@@ -1706,7 +1694,9 @@ function drawRocket(k) {
 
 function drawWorld() {
   ctx.save();
-  if (shake > 0) ctx.translate(rand(-shake, shake), rand(-shake, shake));
+  // kept small on purpose: a nudge, not a rattle
+  const sk = Math.min(shake, 24) * 0.18;
+  if (sk > 0.3) ctx.translate(rand(-sk, sk), rand(-sk, sk));
   drawBackdrop();
   drawArena();
 
@@ -1795,23 +1785,16 @@ function drawPopups() {
 }
 
 function drawVictoryRings() {
-  [0, 0.12, 0.26].forEach((delay, i) => {
-    const tt = victory.t - delay;
-    if (tt <= 0 || tt > 0.9) return;
-    const k = tt / 0.9, r = (1 - Math.pow(1 - k, 3)) * Math.max(W, H) * 0.55;
-    glowOn('#9ff7ff', 20);
-    ctx.strokeStyle = i === 0 ? `rgba(255,255,255,${1 - k})` : `rgba(159,247,255,${(1 - k) * 0.8})`;
-    ctx.lineWidth = (i === 0 ? 10 : 5) * (1 - k) + 1;
-    ctx.beginPath(); ctx.arc(victory.x, victory.y, r, 0, Math.PI * 2); ctx.stroke();
-    glowOff();
-  });
+  // one soft ring rolling out from the core -- no strobing, no white-out
+  const tt = victory.t;
+  if (tt > 1.4) return;
+  const k = tt / 1.4, r = (1 - Math.pow(1 - k, 3)) * Math.max(W, H) * 0.5;
+  ctx.strokeStyle = `rgba(159,247,255,${(1 - k) * 0.45})`;
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(victory.x, victory.y, r, 0, Math.PI * 2); ctx.stroke();
 }
 
 function drawVictoryOverlay() {
-  if (victory.t < 0.3) {
-    ctx.fillStyle = `rgba(255,255,255,${(0.3 - victory.t) * 1.8})`;
-    ctx.fillRect(0, 0, W, H);
-  }
   const a = clamp((victory.t - 0.15) * 3, 0, 1);
   ctx.globalAlpha = a;
   ctx.textAlign = 'center';

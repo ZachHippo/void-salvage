@@ -79,14 +79,14 @@ game; after that every level stays open for replays.
 
 ## Upgrades
 
-The hangar is an upgrade tree rooted at FIGHT, with 28 nodes across four branches:
+The hangar is an upgrade tree rooted at FIGHT, with 25 nodes across four branches:
 
 - **Weapons** (up) -- damage, fire rate, bullet speed, split barrel, rocket pod
-  (one rocket per fight per level), crits, penetrator rounds, ricochet, seekers,
+  (one rocket per fight per level; rockets fly straight), crits, penetrator rounds,
   volatile rounds, and bonus damage to
   gun blocks and cores
 - **Defence** (left) -- plating, nanite repair, deflector shields, faster
-  recharge, longer invulnerability after a hit
+  recharge
 - **Pulse and drones** (right) -- pulse charge rate, radius and damage; turret
   drones plus their fire rate and damage
 - **Salvage and engines** (down) -- pickup range, top speed, and refineries
