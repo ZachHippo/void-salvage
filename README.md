@@ -38,8 +38,8 @@ You can go back and replay any level you have unlocked for more red and blue,
 and the bigger the boss, the bigger the payout.
 
 The boss hunts you: it sits and tracks you, charges up while a warning line and
-crosshair mark where your ship will be if it holds course, then rams straight
-through that spot and sits again. Change direction when it lunges. An arrow over its core shows where it is aimed -- white while it sits,
+crosshair lock onto your ship, then rams straight
+through the spot you were in when the charge ended, and sits again. Move when it lunges. An arrow over its core shows where it is aimed -- white while it sits,
 orange while it charges, red while it dashes. Aimed guns lead your movement, so change
 direction rather than drifting.
 

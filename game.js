@@ -874,7 +874,7 @@ function hurtPlayer(amount) {
 
 // ---------- boss hunting ----------
 // The boss hunts you in a loop: it sits and tracks you, charges up while it
-// locks on to where you will be (a warning line and crosshair show the spot),
+// locks on to you (a warning line and crosshair show the spot),
 // then rams straight through that point and sits again. Its
 // aim is always shown by the arrow over its core.
 function bossAI(dt, ext) {
@@ -894,24 +894,17 @@ function bossAI(dt, ext) {
     settle();
     if (ai.t <= 0) { ai.state = 'charge'; ai.t = boss.guardian ? 0.75 : 0.95; }
   } else if (ai.state === 'charge') {
-    // Predict where the ship will be when the boss gets there if it holds its
-    // heading: solve for the moment the ship's path and the boss's trip (the
-    // rest of the charge, then the dash) meet. A few refinements settle it.
-    const vEff = boss.dashSpeed * 0.8;
-    let t = Math.max(0, ai.t) + dist(boss.x, boss.y, player.x, player.y) / vEff;
-    for (let i = 0; i < 4; i++) {
-      const fx = player.x + player.vx * t, fy = player.y + player.vy * t;
-      t = Math.max(0, ai.t) + dist(boss.x, boss.y, fx, fy) / vEff;
-    }
-    ai.eta = t;
-    ai.px = clamp(player.x + player.vx * t, mx, W - mx);
-    ai.py = clamp(player.y + player.vy * t, my, H - my);
+    // Lock straight onto the ship as it is right now; when the charge ends it
+    // commits to that spot, so moving off it is how you dodge.
+    ai.px = clamp(player.x, mx, W - mx);
+    ai.py = clamp(player.y, my, H - my);
+    ai.eta = dist(boss.x, boss.y, ai.px, ai.py) / (boss.dashSpeed * 0.8);
     turnTo(ai.px, ai.py, boss.turn * 2.6);
     settle();
     if (ai.t <= 0) { ai.state = 'dash'; ai.t = Math.min(2.5, ai.eta + 0.6); ai.tx = ai.px; ai.ty = ai.py; }
   } else {
     // Committed: no steering mid-dash. It drives its body straight through the
-    // predicted point, so holding course gets you rammed and a late turn dodges.
+    // point it locked onto, so sitting still gets you rammed and moving dodges.
     const dx = ai.tx - boss.x, dy = ai.ty - boss.y, d = Math.hypot(dx, dy);
     const want = Math.min(boss.dashSpeed, d * 4 + 60);
     const a = Math.atan2(dy, dx), blend = Math.min(1, 7 * dt);
@@ -1393,7 +1386,7 @@ function drawCoreArrow() {
 }
 
 // While charging, a warning line runs from the core's arrow to the spot the
-// boss is about to ram -- where the ship will be if it holds course and firms up
+// boss is about to ram -- the ship itself -- and firms up
 // as the dash gets closer.
 function drawChargeLine() {
   if (!boss.ai || boss.ai.state !== 'charge' || victory) return;
